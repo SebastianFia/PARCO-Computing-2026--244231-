@@ -25,6 +25,12 @@ sections below):
 ### Experiments Setup
 Whichever method you chose, first make sure to follow this setup instructions:
 
+0. If you are running from a hpc cluster, first make sure to load the necessary modules:
+    ```
+    module load gcc91
+    module load python-3.7.2
+    ```
+
 1.  **Change directory** to the **repository root**
     ```
     cd /path/to/repo/root
@@ -111,7 +117,7 @@ We can also **run all of our experiments in parallel** by submitting to a **hpc 
 a different **job** for each matrix in `matrices_data`, for each thread count
 in `1 2 4 8 16 32`. Each job will run `scripts/run_experiments.py`, which
 will write its results to `experiments_output` (see [**Results format**](#results-format)). 
-To do this simply run in the terminal the folowing command
+To do this simply run in the terminal the folowing commands:
 (first make sure to have followed [**Experiments Setup**](#experiments-setup)):
 ```
 bash scripts/submit_all.bash

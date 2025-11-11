@@ -1,10 +1,10 @@
-export MTX_FILE_PATH="matrices_data/1138_bus.mtx"
+# export MTX_FILE_PATH="matrices_data/1138_bus.mtx"
 # export MTX_FILE_PATH="matrices_data/bcsstk17.mtx"
-# export MTX_FILE_PATH="matrices_data/twotone.mtx"
+export MTX_FILE_PATH="matrices_data/twotone.mtx"
 # export MTX_FILE_PATH="matrices_data/nd12k.mtx"
 # export MTX_FILE_PATH="matrices_data/cage14.mtx"
 
-export OMP_NUM_THREADS=1
+export OMP_NUM_THREADS=8
 
 export OMP_SCHEDULE="static, 64"
 # export OMP_SCHEDULE="dynamic,64"

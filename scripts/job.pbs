@@ -1,8 +1,7 @@
 #!/bin/bash
 #PBS -N spmv_test_${JOB_N_THREADS}_$(basename ${JOB_MTX_FILE_PATH})
-#PBS -l nodes=1:ppn=${JOB_N_THREADS}
-#PBS -l walltime=03:00:00
-#PBS -l select=1:ncpus=1:mem=16gb
+#PBS -l walltime=05:00:00
+#PBS -l select=1:ncpus=${JOB_N_THREADS}:mem=16gb
 #PBS -o ./job.out
 #PBS -e ./job.err
 #PBS -j oe
@@ -11,14 +10,16 @@
 # --- Setup ---
 cd $PBS_O_WORKDIR # Go to submission directory
 
+# Load modules (Python, GCC)
+module load gcc91
+module load python-3.7.2
+
+# Set default env vars
 source scripts/set_default_env_vars.bash
 
 export MTX_FILE_PATH=${JOB_MTX_FILE_PATH}
 export OMP_NUM_THREADS=${JOB_N_THREADS}
 
-# Load modules (Python, GCC)
-module load gcc91
-module load python-3.7.2
 
 # --- Build ---
 make rebuild
