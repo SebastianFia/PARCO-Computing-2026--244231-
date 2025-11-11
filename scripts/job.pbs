@@ -1,10 +1,4 @@
 #!/bin/bash
-#PBS -l walltime=05:00:00
-#PBS -o ./job.out
-#PBS -e ./job.err
-#PBS -j oe
-#PBS -q short_cpuQ
-
 # PBS -o ./logs/${JOB_MTX_BASE_NAME}_${JOB_N_THREADS}.out 
 # PBS -e ./logs/${JOB_MTX_BASE_NAME}_${JOB_N_THREADS}.err
 # PBS -j oe
