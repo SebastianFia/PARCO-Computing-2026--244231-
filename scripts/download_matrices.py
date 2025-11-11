@@ -19,7 +19,7 @@ MATRIX_LIST: List[str] = [
 # Base URL for the SuiteSparse Matrix Collection
 SUITESPARSE_BASE_URL = "https://suitesparse-collection-website.herokuapp.com/MM/"
 # OUTPUT_DIR = Path("matrices_data")
-OUTPUT_DIR = Path("matrices_data_test")
+OUTPUT_DIR = Path("matrices_data")
 
 def download_and_extract_matrix(matrix_name: str, output_dir: Path):
     """

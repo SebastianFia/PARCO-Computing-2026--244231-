@@ -2,9 +2,9 @@
 
 ## Requirements
 To replicate the experiments presented in this repository make sure to run on a linux machine and have installed:
-* gcc version 10.2.0
+* gcc-9.1.0
 * valgrind
-* python3 version 3.9.1
+* python-3.7.2 (we run the scripts using python3)
 
 ## Run expertiments 
 Here we provide 3 ways of running the experiments (more detailed explanation in the
@@ -137,7 +137,7 @@ Here's a list of the env variables used to run the experiments and their default
 *   `MTX_FILE_PATH = "matrices_data/1138_bus.mtx"`: The path for the matrix that we will read 
     and benchmark our operation with
 
-*   `OMP_NUM_THREADS = 8`: The number of threads we will use
+*   `OMP_NUM_THREADS = 1`: The number of threads we will use
 
 *   `OMP_SCHEDULE = "static, 64"`: The omp schedule we will use. Typically will be `static,1`, `static,64`, `dynamic,10`, `dynamic,100` or `guided`
 
