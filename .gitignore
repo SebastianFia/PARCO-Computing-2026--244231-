@@ -1,0 +1,6 @@
+/local_utils
+/build
+/.vscode
+/experiments_output/*
+/matrices_data/*
+/.valgrind_output/*

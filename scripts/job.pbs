@@ -1,0 +1,29 @@
+#!/bin/bash
+#PBS -N spmv_test_${JOB_N_THREADS}_$(basename ${JOB_MTX_FILE_PATH})
+#PBS -l nodes=1:ppn=${JOB_N_THREADS}
+#PBS -l walltime=03:00:00
+#PBS -l select=1:ncpus=1:mem=16gb
+#PBS -o ./job.out
+#PBS -e ./job.err
+#PBS -j oe
+#PBS -q short_cpuQ
+
+# --- Setup ---
+cd $PBS_O_WORKDIR # Go to submission directory
+
+source scripts/set_default_env_vars.bash
+
+export MTX_FILE_PATH=${JOB_MTX_FILE_PATH}
+export OMP_NUM_THREADS=${JOB_N_THREADS}
+
+# Load modules (Python, GCC)
+module load gcc/10.2.0
+module load python/3.9.1
+
+# --- Build ---
+make rebuild
+
+# --- Run ---
+# Given a number of threads and mtx file, the python script will run the c 
+# program with all the combinations of schedules, chunks, and algorithms
+python3 scripts/run_experiments.py
