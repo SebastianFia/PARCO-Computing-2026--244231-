@@ -1,14 +1,17 @@
 #!/bin/bash
-#PBS -N spmv_test_${JOB_N_THREADS}_$(basename ${JOB_MTX_FILE_PATH})
 #PBS -l walltime=05:00:00
-#PBS -l select=1:ncpus=${JOB_N_THREADS}:mem=16gb
 #PBS -o ./job.out
 #PBS -e ./job.err
 #PBS -j oe
 #PBS -q short_cpuQ
 
+# PBS -o ./logs/${JOB_MTX_BASE_NAME}_${JOB_N_THREADS}.out 
+# PBS -e ./logs/${JOB_MTX_BASE_NAME}_${JOB_N_THREADS}.err
+# PBS -j oe
+# PBS -q short_cpuQ
+
 # --- Setup ---
-cd $PBS_O_WORKDIR # Go to submission directory
+cd "$PBS_O_WORKDIR" # Go to submission directory
 
 # Load modules (Python, GCC)
 module load gcc91
