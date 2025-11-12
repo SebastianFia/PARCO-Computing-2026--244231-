@@ -94,7 +94,7 @@ To do this choose one of the options below (first make sure to have followed [**
 * You can **submit all the jobs for a given matrix file** (one for each number of threads in `1 2 4 8 16 32 64`)
 by running:
 ```
-JOB_MTX_FILE_PATH="matrices_data/your_matrix.mtx" bash scripts/sumbit_given_matrix.bash
+JOB_MTX_FILE_PATH="matrices_data/your_matrix.mtx" bash scripts/submit_given_matrix.bash
 ```
 
 * You can **submit all the jobs for a given number of threads** (one for each matrix in `matrices_data`)
@@ -105,13 +105,13 @@ JOB_N_THREADS=4 bash scripts/submit_given_threads.bash
 
 * Optionally you can also **submit jobs individually** by specifying both the number of threads and the matrix file path:
 ```
-JOB_N_THREADS=4 JOB_MTX_FILE_PATH="matrices_data/your_matrix.mtx" bash scripts/sumbit_job.bash
+JOB_N_THREADS=4 JOB_MTX_FILE_PATH="matrices_data/your_matrix.mtx" bash scripts/submit_job.bash
 ```
 
-* Lastly you can also **sumbit all the jobs at once**, but we suggest to avoid this option, since they 
+* Lastly you can also **submit all the jobs at once**, but we suggest to avoid this option, since they 
 are unlikely to all fit at once inside a cluster queue:
 ```
-bash scripts/sumbit_all.bash
+bash scripts/submit_all.bash
 ```
 
 For each one of these methods of submitting jobs, you can optionally pass to the bash script the 
