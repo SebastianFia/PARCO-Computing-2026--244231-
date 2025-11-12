@@ -154,7 +154,7 @@ We can also run the experiments wihout using the python script, by following the
 4. Repeat **steps 2 and 3** for all the different combinations of env variables you want.
 
 ## Results Format
-If for running the experiments you chose the [**Manual Way**](#manual-way), 
+If for running the experiments you chose the [**The Manual Way**](#the-manual-way), 
 then skip this section.
 
 The results of the experiments produced by `scripts/run_experiments.py` will be 
