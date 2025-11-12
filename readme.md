@@ -1,14 +1,16 @@
 # PARCO-Computing-2026--244231-
 
 ## Requirements
-To replicate the experiments presented in this repository make sure to run on a linux machine and have installed:
-* gcc-9.1.0
-* valgrind
-* python-3.7.2 (we run the scripts using python3)
+To replicate the experiments presented in this repository make sure to run on a **Linux** machine and have installed:
+* `gcc-9.1.0`
+* `valgrind`
+* `python-3.7.2` (we run the scripts using python3)
+* `make` (for building the c program with makefile)
 
 ## Run expertiments 
 Here we provide 3 ways of running the experiments (more detailed explanation in the
-sections below):
+sections below). All the methods can work both locally and on a HPC cluster 
+(except **2**, which requires being on a cluster).
 
 1.  [**The default way (Reccomended)**](#the-default-way): 
     Specify `OMP_NUM_THREADS` and `MTX_FILE_PATH` env variables, 
@@ -26,7 +28,7 @@ sections below):
 ### Experiments Setup
 Whichever method you chose, first make sure to follow this setup instructions:
 
-0. If you are running from the interactive session of an hpc cluster, first make sure to load the necessary modules:
+0. If you are running from the **interactive session of an hpc cluster**, first make sure to load the necessary modules:
     ```
     module load gcc91
     module load python-3.7.2
@@ -84,29 +86,36 @@ The simplest way to run some experiments is by following these commands
 
 
 ### The HPC Cluster Way
-We can also **run all of our experiments in parallel** by submitting to a **hpc cluster**
-a different **job** for each matrix in `matrices_data`, for each thread count
-in `1 2 4 8 16 32`. Each job will run `scripts/run_experiments.py`, which
-will write its results to `experiments_output` (see [**Results format**](#results-format)). 
-To do this simply run in the terminal the folowing commands:
-(first make sure to have followed [**Experiments Setup**](#experiments-setup)):
+We can also **run all of our experiments in parallel** by submitting **jobs** to a **hpc cluster**.
+All of our scripts will submit jobs to the `short_cpuQ` queue.
+Each job will run `scripts/run_experiments.py`, which will write its results to `experiments_output` (see [**Results format**](#results-format)). 
+To do this choose one of the options below (first make sure to have followed [**Experiments Setup**](#experiments-setup)):
+
+* You can **submit all the jobs for a given matrix file** (one for each number of threads in `1 2 4 8 16 32 64`)
+by running:
 ```
-bash scripts/submit_all.bash
+JOB_MTX_FILE_PATH="matrices_data/your_matrix.mtx" bash scripts/sumbit_given_matrix.bash
 ```
 
-To run extra experiments, or if it is not feasible to submit all the jobs in parallel, you can
-**submit the jobs for a given number of threads** by running (for example we did this to perform an extra run with 64 threads):
+* You can **submit all the jobs for a given number of threads** (one for each matrix in `matrices_data`)
+by running (e.g. with 4 threads):
 ```
-JOB_N_THREADS=64 bash scripts/submit_given_threads.bash
-```
-
-Optionally you can also **submit jobs individually** by specifying both the number of threads and the matrix file path:
-```
-JOB_N_THREADS=64 JOB_MTX_FILE_PATH="matrices_data/your_matrix.mtx" bash scripts/sumbit_job.bash
+JOB_N_THREADS=4 bash scripts/submit_given_threads.bash
 ```
 
-For each one of these three methods of submitting jobs, you can optionally pass to the bash script the 
-walltime of the job and the job memory as env variables (or even set them with export). They default to:
+* Optionally you can also **submit jobs individually** by specifying both the number of threads and the matrix file path:
+```
+JOB_N_THREADS=4 JOB_MTX_FILE_PATH="matrices_data/your_matrix.mtx" bash scripts/sumbit_job.bash
+```
+
+* Lastly you can also **sumbit all the jobs at once**, but we suggest to avoid this option, since they 
+are unlikely to all fit at once inside a cluster queue:
+```
+bash scripts/sumbit_all.bash
+```
+
+For each one of these methods of submitting jobs, you can optionally pass to the bash script the 
+**walltime and memory of the job** as **env variables** (or even set them with **export**). They default to:
 ```
 JOB_WALLTIME="05:30:00"
 JOB_MEMORY="16gb"
@@ -114,7 +123,7 @@ JOB_MEMORY="16gb"
 
 
 ### The Manual Way
-We can also run the experiments wihout using the python script, by following these instruction
+We can also run the experiments wihout using the python script, by following these instructions
 (first make sure to have followed the [**Experiments Setup**](#experiments-setup)):
 
 1.  Set **default env variables** by running:

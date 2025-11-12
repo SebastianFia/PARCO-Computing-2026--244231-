@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# PBS -o ./logs/${JOB_MTX_BASE_NAME}_${JOB_N_THREADS}.out 
-# PBS -e ./logs/${JOB_MTX_BASE_NAME}_${JOB_N_THREADS}.err
-# PBS -j oe
 
 # --- Setup ---
 cd "$PBS_O_WORKDIR" # Go to submission directory

@@ -11,9 +11,9 @@ MATRIX_LIST: List[str] = [
     "HB/1138_bus", # rows/cols: 1138 | nnz: 4,054 | nz density: 3.13e-3
     "HB/bcsstk17", # rows/cols: 10,974 | nnz: 428,650 | nz density: 3.56e-3
     "ATandT/twotone", # rows/cols: 120,750 | nnz: 1,206,265 | nz density: 8.27e-5
+    "Boeing/pwtk", # rows/cols: 217,918 | nnz: 11,542,432 | nz density: 2.43e-4
     "ND/nd12k", # rows/cols: 36,000 | nnz: 14,220,946 | nz density: 1.10e-2
-    "vanHeukelum/cage14", # rows/cols: 1,505,785 | nnz: 27,130,349 | nz density: 1.20e-5
-]
+] 
 
 
 # Base URL for the SuiteSparse Matrix Collection
@@ -38,11 +38,16 @@ def download_and_extract_matrix(matrix_name: str, output_dir: Path):
     download_url = f"{SUITESPARSE_BASE_URL}{matrix_name}.tar.gz"
     local_archive_path = output_dir / f"{base_filename}.tar.gz"
     tmp_folder_path = output_dir / f"{base_filename}"
+    final_path = output_dir / f"{base_filename}.mtx"
     
     # Ensure the output directory exists
     output_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"--- Downloading {base_filename} ---")
+
+    if final_path.exists():
+        print(f"File already exists, skip download: \"{final_path}\"")
+        return
     
     # 2. Download the archive file
     try:
