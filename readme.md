@@ -14,18 +14,19 @@ sections below):
     Specify `OMP_NUM_THREADS` and `MTX_FILE_PATH` env variables, 
     then run experiments with `run_experiments.py` script
 
-2.  [**The manual way**](#the-manual-way): 
+2.  [**The HPC cluster way**](#the-hpc-cluster-way): 
+    Submit multiple jobs to a hpc cluster, by making use of a `job.pbs` script
+
+3.  [**The manual way**](#the-manual-way): 
     Specify all the env variables (also `OMP_SCHEDULE_TYPE`, ...), 
     and then run directly the c program (normally or with valgrind)
 
-3.  [**The HPC cluster way**](#the-hpc-cluster-way): 
-    Submit multiple jobs to a hpc cluster, by making use of a `job.pbs` script
 
 
 ### Experiments Setup
 Whichever method you chose, first make sure to follow this setup instructions:
 
-0. If you are running from a hpc cluster, first make sure to load the necessary modules:
+0. If you are running from the interactive session of an hpc cluster, first make sure to load the necessary modules:
     ```
     module load gcc91
     module load python-3.7.2
@@ -81,6 +82,37 @@ The simplest way to run some experiments is by following these commands
 
 5. Repeat **steps 2 to 4** by using different thread counts and different matrices
 
+
+### The HPC Cluster Way
+We can also **run all of our experiments in parallel** by submitting to a **hpc cluster**
+a different **job** for each matrix in `matrices_data`, for each thread count
+in `1 2 4 8 16 32`. Each job will run `scripts/run_experiments.py`, which
+will write its results to `experiments_output` (see [**Results format**](#results-format)). 
+To do this simply run in the terminal the folowing commands:
+(first make sure to have followed [**Experiments Setup**](#experiments-setup)):
+```
+bash scripts/submit_all.bash
+```
+
+To run extra experiments, or if it is not feasible to submit all the jobs in parallel, you can
+**submit the jobs for a given number of threads** by running (for example we did this to perform an extra run with 64 threads):
+```
+JOB_N_THREADS=64 bash scripts/submit_given_threads.bash
+```
+
+Optionally you can also **submit jobs individually** by specifying both the number of threads and the matrix file path:
+```
+JOB_N_THREADS=64 JOB_MTX_FILE_PATH="matrices_data/your_matrix.mtx" bash scripts/sumbit_job.bash
+```
+
+For each one of these three methods of submitting jobs, you can optionally pass to the bash script the 
+walltime of the job and the job memory as env variables (or even set them with export). They default to:
+```
+JOB_WALLTIME="05:30:00"
+JOB_MEMORY="16gb"
+```
+
+
 ### The Manual Way
 We can also run the experiments wihout using the python script, by following these instruction
 (first make sure to have followed the [**Experiments Setup**](#experiments-setup)):
@@ -111,24 +143,6 @@ We can also run the experiments wihout using the python script, by following the
     we make sure to record only the cache misses of the actual operation.
 
 4. Repeat **steps 2 and 3** for all the different combinations of env variables you want.
-
-### The HPC Cluster Way
-We can also **run all of our experiments in parallel** by submitting to a **hpc cluster**
-a different **job** for each matrix in `matrices_data`, for each thread count
-in `1 2 4 8 16 32`. Each job will run `scripts/run_experiments.py`, which
-will write its results to `experiments_output` (see [**Results format**](#results-format)). 
-To do this simply run in the terminal the folowing commands:
-(first make sure to have followed [**Experiments Setup**](#experiments-setup)):
-```
-bash scripts/submit_all.bash
-```
-
-To run extra experiments, or if it is not feasible to submit all the jobs in parallel, you can
-**submit the jobs individually** by running (e.g. with 4 threads):
-```
-qsub -v JOB_N_THREADS=4,JOB_MTX_FILE_PATH="matrices_data/your_matrix.mtx" job.pbs,
-```
-
 
 ## Results Format
 If for running the experiments you chose the [**Fully Manual Way**](#fully-manual-way), 
