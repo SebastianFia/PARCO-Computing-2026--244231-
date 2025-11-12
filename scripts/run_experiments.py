@@ -175,9 +175,4 @@ for alg in algorithms:
             f.write(csv_row) 
 
 
-#Clean callgrind output files
-if os.path.isdir(VALGRIND_OUT_FOLDER):
-    shutil.rmtree(VALGRIND_OUT_FOLDER)
-os.makedirs(VALGRIND_OUT_FOLDER, exist_ok=True)
-            
 print(f"Finished job for {MATRIX_NAME} with {N_THREADS} threads.")

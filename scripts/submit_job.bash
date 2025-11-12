@@ -19,6 +19,8 @@ JOB_NAME="spmv_${JOB_N_THREADS}_${JOB_MATRIX_BASE_NAME}"
 echo "Submitting job: ${JOB_MATRIX_BASE_NAME} with $JOB_N_THREADS threads"
 echo "  Walltime: ${JOB_WALLTIME}, Memory: ${JOB_MEMORY}"
 
+mkdir -p logs
+
 qsub -N ${JOB_NAME} \
     -v JOB_N_THREADS=${JOB_N_THREADS},JOB_MTX_FILE_PATH=${JOB_MTX_FILE_PATH} \
     -l select=1:ncpus=${JOB_N_THREADS}:mem=${JOB_MEMORY},walltime=${JOB_WALLTIME} \
