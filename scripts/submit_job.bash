@@ -25,6 +25,6 @@ qsub -N ${JOB_NAME} \
     -v JOB_N_THREADS=${JOB_N_THREADS},JOB_MTX_FILE_PATH=${JOB_MTX_FILE_PATH} \
     -l select=1:ncpus=${JOB_N_THREADS}:mem=${JOB_MEMORY},walltime=${JOB_WALLTIME} \
     -q short_cpuQ \
-    -o ./logs/${JOB_MTX_BASE_NAME}_${JOB_N_THREADS}.out \
-    -e ./logs/${JOB_MTX_BASE_NAME}_${JOB_N_THREADS}.err \
+    -o ./logs/${JOB_MATRIX_BASE_NAME}_${JOB_N_THREADS}.out \
+    -e ./logs/${JOB_MATRIX_BASE_NAME}_${JOB_N_THREADS}.err \
     scripts/job.pbs
