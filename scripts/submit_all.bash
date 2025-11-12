@@ -3,6 +3,7 @@ set -euo pipefail
 
 JOB_WALLTIME=${JOB_WALLTIME:="05:30:00"}
 JOB_MEMORY=${JOB_MEMORY:="16gb"}
+MATRICES_DIR=${MATRICES_DIR:="matrices_data"}
 
 for JOB_N_THREADS in 1 2 4 8 16 32; do
   for JOB_MTX_FILE_PATH in "$MATRICES_DIR"/*.mtx; do
