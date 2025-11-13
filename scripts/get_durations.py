@@ -15,7 +15,7 @@ MATRIX_NAME = os.path.basename(MTX_FILE_PATH)
 
 # Parameter Sweep
 algorithms = ["csr"]
-if N_THREADS == 1:
+if N_THREADS == "1":
     schedules = [("NA", "NA")]
 else:
     schedules = [("static", "1"), ("static", "64"), ("dynamic", "10"), ("dynamic", "100"), ("guided", "NA")]
@@ -75,7 +75,11 @@ def parse_valgrind_output(valgrind_out_str):
 
 # --- Run the Sweep ---
 for alg in algorithms:
-    for (sched, chunk) in schedules:
+
+    # The csb algorithm doesn't rely on OMP's schedules
+    tmp_schedules = [("NA", "NA")] if alg=="csb" else schedules 
+
+    for (sched, chunk) in tmp_schedules:
         # --- 1. Set env vars for C program ---
         env = os.environ.copy()
         env["ALG_NAME"] = alg

@@ -25,7 +25,7 @@
 
 int main() 
 {
-    // return test_operations();
+    return test_operations();
 
     /* Global exit status variable. Is set to EXIT_FAILURE only on error. */
     int exit_status = EXIT_SUCCESS;

@@ -3,6 +3,9 @@
 # --- Setup ---
 cd "$PBS_O_WORKDIR" # Go to submission directory
 
+# --- Print cpu info ---
+bash scripts/print_cpu_info.bash
+
 # Load modules (Python, GCC)
 module load gcc91
 module load python-3.7.2

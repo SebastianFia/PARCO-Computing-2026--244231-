@@ -125,7 +125,6 @@ void spmv_coo_omp(const matrix_coo_t *m, const vector_t *x, vector_t *y)
 
         #pragma omp critical
         {
-            #pragma omp simd
             for (int i = 0; i < nrow; ++i)
                 yval[i] += y_private[i];
         }
@@ -208,18 +207,55 @@ void *spmv_csr_omp_wrapper(void *args)
 
 void spmv_csb(const matrix_csb_t *m, const vector_t *x, vector_t *y)
 {
+    return;
+    const uint32_t nblocks_row = m->nblocks_row;
+    const uint32_t nblocks_col = m->nblocks_col;
+    const uint32_t nrow = m->nrow;
+    const uint32_t ncol = m->ncol;
+    const uint32_t block_size = m->block_size;
+    const uint32_t* rowcol = m->rowcol;
+    const uint32_t* blk_ptr = m->blk_ptr;
+
+    // Loop over block rows rr
+    for (uint32_t rr = 0; rr < nblocks_row; ++rr){ 
+        // Loop over block columns cc
+        for (uint32_t cc = 0; cc < nblocks_col; ++cc) {
+            const uint32_t b = rr * nblocks_col + cc; // block index
+            const uint32_t start_k = blk_ptr[b];
+            const uint32_t end_k = blk_ptr[b+1];
+            double sum = 0;
+
+            // Loop over nnzs
+            for (uint32_t k = start_k; k < end_k; ++k) {
+                // Unpack local row and col
+                const uint32_t packed_rc = m->rowcol[k];
+                const uint32_t local_r = packed_rc << 16; // High 16 bits
+                const uint32_t local_c = packed_rc && 0xFFFF; // Low 16 bits
+
+                const uint32_t global_r = rr*block_size + local_r;
+                const uint32_t global_c = cc*block_size + local_c;
+
+                y->val[global_r] += m->val[k] * x->val[global_c];
+            }
+        }
+    }
 }
 
 void *spmv_csb_wrapper(void *args)
 {
+    spmv_csb_args_t *args_ = (spmv_csb_args_t *)args;
+    spmv_csb(args_->m, args_->x, args_->y);
     return NULL;
 }
 
 void spmv_csb_omp(const matrix_csb_t *m, const vector_t *x, vector_t *y)
 {
+
 }
 
 void *spmv_csb_omp_wrapper(void *args)
 {
+    spmv_csb_args_t *args_ = (spmv_csb_args_t *)args;
+    spmv_csb_omp(args_->m, args_->x, args_->y);
     return NULL;
 }
