@@ -1,126 +1,105 @@
+import torch
+from transformers import AutoModel, AutoModelForCausalLM
+import numpy as np
+from huggingface_hub import hf_hub_download
+from safetensors.torch import load_file
 import os
-import tarfile
-import requests
-import shutil
-from pathlib import Path
-from typing import List
 
-# --- Configuration ---
-# List of matrix names (e.g., from the SuiteSparse URL path)
-MATRIX_LIST: List[str] = [
-    "HB/1138_bus", # rows/cols: 1138 | nnz: 4,054 | nz density: 3.13e-3
-    "HB/bcsstk17", # rows/cols: 10,974 | nnz: 428,650 | nz density: 3.56e-3
-    "ATandT/twotone", # rows/cols: 120,750 | nnz: 1,206,265 | nz density: 8.27e-5
-    "Boeing/pwtk", # rows/cols: 217,918 | nnz: 11,542,432 | nz density: 2.43e-4
-    "ND/nd12k", # rows/cols: 36,000 | nnz: 14,220,946 | nz density: 1.10e-2
-] 
+# Configuration
+MODELS = {
+    "BERT_Query": ("bert-base-uncased", "encoder.layer.0.attention.self.query.weight"),
+    "Llama_MLP":  ("TinyLlama/TinyLlama-1.1B-Chat-v1.0", "model.layers.0.mlp.down_proj.weight"),
+    "ResNet_FC":  ("resnet50", "fc.weight") # Torchvision model
+}
 
-
-# Base URL for the SuiteSparse Matrix Collection
-SUITESPARSE_BASE_URL = "https://suitesparse-collection-website.herokuapp.com/MM/"
-# OUTPUT_DIR = Path("matrices_data")
-OUTPUT_DIR = Path("matrices_data")
-
-def download_and_extract_matrix(matrix_name: str, output_dir: Path):
-    """
-    Downloads, extracts, and cleans up the matrix file.
+def export_layer_hf_efficient(model_id, target_tensor_name, output_filename):
+    print(f"1. Locating {target_tensor_name} in {model_id}...")
     
-    Args:
-        matrix_name: e.g., 'ATandT/twotone'
-    """
-    
-    # 1. Construct URL and local file paths
-    # URL: https://suitesparse-collection-website.herokuapp.com/MM/ATandT/twotone.tar.gz
-    # The actual file inside the archive is usually name/name.mtx
-    
-    # Extract the base filename (e.g., 'citeseer')
-    base_filename = matrix_name.split('/')[-1]
-    download_url = f"{SUITESPARSE_BASE_URL}{matrix_name}.tar.gz"
-    local_archive_path = output_dir / f"{base_filename}.tar.gz"
-    tmp_folder_path = output_dir / f"{base_filename}"
-    final_path = output_dir / f"{base_filename}.mtx"
-    
-    # Ensure the output directory exists
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    print(f"--- Downloading {base_filename} ---")
-
-    if final_path.exists():
-        print(f"File already exists, skip download: \"{final_path}\"")
-        return
-    
-    # 2. Download the archive file
+    # Step A: Download the index file to find which 'shard' contains our layer
+    # (Large models are split into multiple files: model-0001.safetensors, etc.)
     try:
-        with requests.get(download_url, stream=True) as r:
-            r.raise_for_status() # Raise HTTPError for bad responses (4xx or 5xx)
-            with open(local_archive_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-        print(f"Successfully downloaded: {local_archive_path}")
+        index_path = hf_hub_download(repo_id=model_id, filename="model.safetensors.index.json")
+        import json
+        with open(index_path, 'r') as f:
+            index = json.load(f)
+        
+        # Find which file contains our tensor
+        if target_tensor_name in index["weight_map"]:
+            target_file = index["weight_map"][target_tensor_name]
+            print(f" -> Found tensor in file: {target_file}")
+        else:
+            print("Tensor name not found in index.")
+            return
+    except:
+        # Fallback for smaller models that aren't sharded (like TinyLlama)
+        print(" -> Model appears to be single-file (not sharded).")
+        target_file = "model.safetensors"
 
-    except requests.exceptions.RequestException as e:
-        print(f"ERROR: Failed to download {download_url}. Check network/URL. {e}")
-        return
+    # Step B: Download ONLY that specific shard (e.g., 1GB instead of 15GB)
+    print(f"2. Downloading shard: {target_file} (this might take a moment)...")
+    file_path = hf_hub_download(repo_id=target_tensor_name, filename=target_file)
 
-    # 3. Extract the Matrix Market file (.mtx)
+    # Step C: Load ONLY the specific tensor from the file
+    print("3. Extracting tensor from file...")
+    # safetensors allows loading just one key!
     try:
-        with tarfile.open(local_archive_path, 'r:gz') as tar:
-            # We are looking for the Matrix Market file inside the archive
-            mtx_files = [member for member in tar.getnames() if member.endswith('.mtx')]
-            
-            if not mtx_files:
-                print("ERROR: No .mtx file found in the archive.")
-                return
-            
-            # The .mtx file is usually the first (and only) one of interest
-            mtx_file_to_extract = mtx_files[0]
-            
-            # Extract the .mtx file directly to the output directory
-            tar.extract(mtx_file_to_extract, path=output_dir)
-            
-            # Rename the extracted file to a clean name (e.g., 'citeseer.mtx')
-            extracted_path = output_dir / Path(mtx_file_to_extract).name
-            final_path = output_dir / f"{base_filename}.mtx"
-            
-            if extracted_path.exists():
-                extracted_path.rename(final_path)
-            else:
-                # If the extraction preserves the folder path, find the file inside
-                extracted_full_path = output_dir / mtx_file_to_extract
-                if extracted_full_path.exists():
-                     extracted_full_path.rename(final_path)
-                
-            print(f"Extracted and saved: {final_path}")
-            
-    except tarfile.TarError as e:
-        print(f"ERROR: Failed to extract archive {local_archive_path}. {e}")
-    finally:
-        # 4. Cleanup: Delete the large .tar.gz archive
-        if local_archive_path.exists():
-            os.remove(local_archive_path)
-            print(f"Cleaned up archive: {local_archive_path}")
-
-        # 5. Cleanup: Delete the temporary folder created by extraction
-        if tmp_folder_path.is_dir():
-            shutil.rmtree(tmp_folder_path)
-            print(f"Cleaned up temporary folder: {tmp_folder_path}")
-
-
-def main():
-    print("Starting matrix download process.")
-    
-    # Ensure requests is installed: pip install requests
-    try:
-        import requests
+        from safetensors import safe_open
+        with safe_open(file_path, framework="pt", device="cpu") as f:
+            tensor = f.get_tensor(target_tensor_name)
     except ImportError:
-        print("\nERROR: The 'requests' library is not installed.")
-        print("Please run: pip install requests")
-        return
+        # Fallback if it's a pytorch .bin file
+        weights = torch.load(file_path, map_location="cpu")
+        tensor = weights[target_tensor_name]
+        del weights # Free RAM immediately
 
-    for name in MATRIX_LIST:
-        download_and_extract_matrix(name, OUTPUT_DIR)
+    # Step D: Save for C++
+    print(f"4. Processing {tensor.shape}...")
+    # Ensure it is Float32 for your C++ baseline, or keep as is.
+    # Note: Llama weights are usually BF16. Converting to Float32 for standard export.
+    data = tensor.float().numpy()
+    
+    rows, cols = data.shape
+    
+    # Save as: [Rows(int32)] [Cols(int32)] [Raw Data...]
+    with open(output_filename, "wb") as f:
+        np.array([rows, cols], dtype=np.int32).tofile(f)
+        data.tofile(f)
+        
+    print(f"SUCCESS: Saved to {output_filename} ({os.path.getsize(output_filename)/1024/1024:.2f} MB)")
 
-    print("\nDownload process complete.")
+def export_layer(model_name, layer_name, output_file):
+    print(f"Loading {model_name}...")
+    try:
+        # Load model with checking for SafeTensors/Bin
+        if "resnet" in model_name:
+            import torchvision
+            model = torchvision.models.resnet50(pretrained=True)
+        else:
+            model = AutoModel.from_pretrained(model_name, torch_dtype="auto")
+        
+        # Extract weight
+        state_dict = model.state_dict()
+        if layer_name not in state_dict:
+            print(f"Layer {layer_name} not found. Available keys: {list(state_dict.keys())[:5]}...")
+            return
+
+        weight = state_dict[layer_name].float().numpy() # Convert to FP32 for generic usage
+        rows, cols = weight.shape
+        print(f"Extracted {layer_name}: {rows}x{cols} (Density: {np.count_nonzero(weight)/weight.size:.2f})")
+
+        # Save as raw binary (Row-Major)
+        # File format: [Rows (int32)][Cols (int32)][Data (float32)...]
+        with open(output_file, "wb") as f:
+            np.array([rows, cols], dtype=np.int32).tofile(f)
+            weight.tofile(f)
+        print(f"Saved to {output_file}")
+
+    except Exception as e:
+        print(f"Error: {e}")
+
 
 if __name__ == "__main__":
-    main()
+    # Run
+    export_layer(*MODELS["BERT_Query"], "matrices_data/bert_query.bin")
+    # export_layer_hf_efficient(*MODELS["Llama_MLP"], "llama_mlp.bin")
+    # export_layer(*MODELS["ResNet_FC"], "resnet_fc.bin")
