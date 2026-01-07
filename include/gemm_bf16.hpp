@@ -476,14 +476,14 @@ inline void gemm_bf16_avx2_tiled_parallel_N(
         const int n_micropanels_A = ceil_division(MC, MR);
         size_t elements_A_packed = size_t(n_micropanels_A) * max_micropanel_stride_A;
         size_t bytes_A_packed = round_up(n_micropanels_A * max_micropanel_stride_A * sizeof(bfloat16_t), ALIGNMENT);
-        auto* A_packed = reinterpret_cast<bfloat16_t*>(std::aligned_alloc(ALIGNMENT, bytes_A_packed));
+        auto* A_packed = reinterpret_cast<bfloat16_t*>(aligned_alloc(ALIGNMENT, bytes_A_packed));
 
         // Allocate B_packed, private per thread (stored in L1/L2/L3 cache depending on N and on num_threads)
         const int max_micropanel_stride_B = round_up(KC * NR, ALIGNMENT / sizeof(bfloat16_t));
         const int n_micropanels_B = ceil_division(NC, NR);
         size_t elements_B_packed = size_t(n_micropanels_B) * max_micropanel_stride_B;
         size_t bytes_B_packed = round_up(elements_B_packed * sizeof(bfloat16_t), ALIGNMENT);
-        auto* B_packed = reinterpret_cast<bfloat16_t*>(std::aligned_alloc(ALIGNMENT, bytes_B_packed));
+        auto* B_packed = reinterpret_cast<bfloat16_t*>(aligned_alloc(ALIGNMENT, bytes_B_packed));
 
         // (j_cache < j_cache_end) here is equivalent to (j_cache * NC < N)
         int j_cache_end = ceil_division(N, NC);
@@ -591,7 +591,7 @@ inline void gemm_bf16_avx2_tiled_parallel_M(
     const int n_micropanels_B = ceil_division(NC, NR);
     size_t elements_B_packed = size_t(n_micropanels_B) * max_micropanel_stride_B;
     size_t bytes_B_packed = round_up(elements_B_packed * sizeof(bfloat16_t), ALIGNMENT);
-    auto* B_packed = reinterpret_cast<bfloat16_t*>(std::aligned_alloc(ALIGNMENT, bytes_B_packed));
+    auto* B_packed = reinterpret_cast<bfloat16_t*>(aligned_alloc(ALIGNMENT, bytes_B_packed));
 
     #pragma omp parallel
     {
@@ -600,7 +600,7 @@ inline void gemm_bf16_avx2_tiled_parallel_M(
         const int n_micropanels_A = ceil_division(MC, MR);
         size_t elements_A_packed = size_t(n_micropanels_A) * max_micropanel_stride_A;
         size_t bytes_A_packed = round_up(n_micropanels_A * max_micropanel_stride_A * sizeof(bfloat16_t), ALIGNMENT);
-        auto* A_packed = reinterpret_cast<bfloat16_t*>(std::aligned_alloc(ALIGNMENT, bytes_A_packed));
+        auto* A_packed = reinterpret_cast<bfloat16_t*>(aligned_alloc(ALIGNMENT, bytes_A_packed));
 
         // Cache level tiling 
         // j_cache * NC, k_cache * KC and i_cache * MC are "the starting indicies of cache level blocks"

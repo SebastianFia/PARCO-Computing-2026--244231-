@@ -23,7 +23,7 @@ struct Matrix {
     Matrix(int r, int c, size_t d_sz, DType d_type) 
         : rows(r), cols(c), dtype_size(d_sz), dtype(d_type) {
         size_t bytes = rows * cols * dtype_size;
-        raw_data = static_cast<char*>(std::aligned_alloc(ALIGNMENT, bytes));
+        raw_data = static_cast<char*>(aligned_alloc(ALIGNMENT, bytes));
         assert(raw_data != NULL && "Allocation failed");
         std::memset(raw_data, 0, bytes);
     }
