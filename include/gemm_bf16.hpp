@@ -467,7 +467,7 @@ inline void gemm_bf16_avx2_tiled_parallel_N(
 
     const int KC = round_up(std::min(K_CACHE_TILE_BF16, K), K_UNROLL_BF16); // We enforce KC to be a nonzero multiple of K_UNROLL_BF16
     const int MC = std::min(M_CACHE_TILE_BF16, M); // Note that we handle also MC < MR
-    const int NC = round_up(std::clamp(N / num_threads, NR, N_CACHE_TILE_BF16), NR); // We enforce NC to be a nonzero multiple of NR
+    const int NC = round_up(clamp(N / num_threads, NR, N_CACHE_TILE_BF16), NR); // We enforce NC to be a nonzero multiple of NR
 
     #pragma omp parallel
     {
@@ -583,7 +583,7 @@ inline void gemm_bf16_avx2_tiled_parallel_M(
     assert(K > 0 && "K should be > 0");
 
     const int KC = round_up(std::min(K_CACHE_TILE_BF16, K), K_UNROLL_BF16); // We enforce KC to be a nonzero multiple of K_UNROLL_BF16
-    const int MC = std::clamp(M / num_threads, 1, M_CACHE_TILE_BF16); // Note that we handle also MC < MR
+    const int MC = clamp(M / num_threads, 1, M_CACHE_TILE_BF16); // Note that we handle also MC < MR
     const int NC = round_up(std::min(N, N_CACHE_TILE_BF16), NR); // We enforce NC to be a nonzero multiple of NR
 
     // Allocate B_packed, shared across threads (ideally stored in L3 cache)
