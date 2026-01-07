@@ -356,121 +356,122 @@ inline void packB_avx2_int8(
     }
 }
 
+// TODO: fix gemm_int8_avx2_tiled_parallel_N
 inline void gemm_int8_avx2_tiled_parallel_N(
     const int8_t* __restrict__ A, 
     const int8_t* __restrict__ B, 
     int32_t* __restrict__ C, 
     const int M, const int N, const int K
 ) {
-    const int num_threads = omp_get_max_threads();
-    const int MR = M_REGISTER_TILE_BF16;
-    const int NR = N_REGISTER_TILE_BF16;
+    // const int num_threads = omp_get_max_threads();
+    // const int MR = M_REGISTER_TILE_BF16;
+    // const int NR = N_REGISTER_TILE_BF16;
     
-    static_assert(NR == 8, "gemm_bf16_avx2_tiled_parallel_N assumes NR == 8");
-    static_assert(MR == 8, "gemm_bf16_avx2_tiled_parallel_N assumes MR == 8");
-    assert(N > 0 && "N should be > 0");
-    assert(M > 0 && "M should be > 0");
-    assert(K > 0 && "K should be > 0");
+    // static_assert(NR == 8, "gemm_bf16_avx2_tiled_parallel_N assumes NR == 8");
+    // static_assert(MR == 8, "gemm_bf16_avx2_tiled_parallel_N assumes MR == 8");
+    // assert(N > 0 && "N should be > 0");
+    // assert(M > 0 && "M should be > 0");
+    // assert(K > 0 && "K should be > 0");
 
-    const int KC = round_up(std::min(K_CACHE_TILE_BF16, K), K_UNROLL_BF16); // We enforce KC to be a nonzero multiple of K_UNROLL_BF16
-    const int MC = std::min(M_CACHE_TILE_BF16, M); // Note that we handle also MC < MR
-    const int NC = round_up(std::clamp(N / num_threads, NR, N_CACHE_TILE_BF16), NR); // We enforce NC to be a nonzero multiple of NR
+    // const int KC = round_up(std::min(K_CACHE_TILE_BF16, K), K_UNROLL_BF16); // We enforce KC to be a nonzero multiple of K_UNROLL_BF16
+    // const int MC = std::min(M_CACHE_TILE_BF16, M); // Note that we handle also MC < MR
+    // const int NC = round_up(std::clamp(N / num_threads, NR, N_CACHE_TILE_BF16), NR); // We enforce NC to be a nonzero multiple of NR
 
-    #pragma omp parallel
-    {
-        // Allocate A_packed, private per thread (ideally stored in L2/L1 cache)
-        const int max_micropanel_stride_A = round_up(KC * MR, ALIGNMENT / sizeof(int8_t));
-        const int n_micropanels_A = ceil_division(MC, MR);
-        size_t elements_A_packed = size_t(n_micropanels_A) * max_micropanel_stride_A;
-        size_t bytes_A_packed = round_up(n_micropanels_A * max_micropanel_stride_A * sizeof(int8_t), ALIGNMENT);
-        auto* A_packed = reinterpret_cast<int8_t*>(std::aligned_alloc(ALIGNMENT, bytes_A_packed));
+    // #pragma omp parallel
+    // {
+    //     // Allocate A_packed, private per thread (ideally stored in L2/L1 cache)
+    //     const int max_micropanel_stride_A = round_up(KC * MR, ALIGNMENT / sizeof(int8_t));
+    //     const int n_micropanels_A = ceil_division(MC, MR);
+    //     size_t elements_A_packed = size_t(n_micropanels_A) * max_micropanel_stride_A;
+    //     size_t bytes_A_packed = round_up(n_micropanels_A * max_micropanel_stride_A * sizeof(int8_t), ALIGNMENT);
+    //     auto* A_packed = reinterpret_cast<int8_t*>(std::aligned_alloc(ALIGNMENT, bytes_A_packed));
 
-        // Allocate B_packed, private per thread (stored in L1/L2/L3 cache depending on N and on num_threads)
-        const int max_micropanel_stride_B = round_up(KC * NR, ALIGNMENT / sizeof(int8_t));
-        const int n_micropanels_B = ceil_division(NC, NR);
-        size_t elements_B_packed = size_t(n_micropanels_B) * max_micropanel_stride_B;
-        size_t bytes_B_packed = round_up(elements_B_packed * sizeof(int8_t), ALIGNMENT);
-        auto* B_packed = reinterpret_cast<int8_t*>(std::aligned_alloc(ALIGNMENT, bytes_B_packed));
+    //     // Allocate B_packed, private per thread (stored in L1/L2/L3 cache depending on N and on num_threads)
+    //     const int max_micropanel_stride_B = round_up(KC * NR, ALIGNMENT / sizeof(int8_t));
+    //     const int n_micropanels_B = ceil_division(NC, NR);
+    //     size_t elements_B_packed = size_t(n_micropanels_B) * max_micropanel_stride_B;
+    //     size_t bytes_B_packed = round_up(elements_B_packed * sizeof(int8_t), ALIGNMENT);
+    //     auto* B_packed = reinterpret_cast<int8_t*>(std::aligned_alloc(ALIGNMENT, bytes_B_packed));
 
-        // (j_cache < j_cache_end) here is equivalent to (j_cache * NC < N)
-        int j_cache_end = ceil_division(N, NC);
+    //     // (j_cache < j_cache_end) here is equivalent to (j_cache * NC < N)
+    //     int j_cache_end = ceil_division(N, NC);
 
-        // Cache level tiling 
-        // j_cache * NC, k_cache * KC and i_cache * MC are "the starting indicies of cache level blocks"
-        #pragma omp for schedule(static)
-        for (int j_cache = 0; j_cache < j_cache_end; ++j_cache) {
-            int n_end = std::min(NC, N - j_cache * NC);
+    //     // Cache level tiling 
+    //     // j_cache * NC, k_cache * KC and i_cache * MC are "the starting indicies of cache level blocks"
+    //     #pragma omp for schedule(static)
+    //     for (int j_cache = 0; j_cache < j_cache_end; ++j_cache) {
+    //         int n_end = std::min(NC, N - j_cache * NC);
 
-            for (int k_cache = 0; k_cache * KC < K; ++k_cache) {
-                // When packing A and B, we will pad along the k dim with zeros up to k_pad.
-                // This ensures k_pad is divisible by the unrolling depth.
-                const int k_end = std::min(KC, K - k_cache * KC);
-                const int k_pad = round_up(k_end, K_UNROLL_BF16);
+    //         for (int k_cache = 0; k_cache * KC < K; ++k_cache) {
+    //             // When packing A and B, we will pad along the k dim with zeros up to k_pad.
+    //             // This ensures k_pad is divisible by the unrolling depth.
+    //             const int k_end = std::min(KC, K - k_cache * KC);
+    //             const int k_pad = round_up(k_end, K_UNROLL_BF16);
 
-                // Stride between the start of two consecutive micropanels inside A_packed.
-                // We round it up to ensure alignment.
-                // See packA_avx2_bf16 for the A_packed layout explanation.
-                const int micropanel_stride_A = round_up(k_pad * MR, ALIGNMENT / sizeof(bfloat16_t));
+    //             // Stride between the start of two consecutive micropanels inside A_packed.
+    //             // We round it up to ensure alignment.
+    //             // See packA_avx2_bf16 for the A_packed layout explanation.
+    //             const int micropanel_stride_A = round_up(k_pad * MR, ALIGNMENT / sizeof(bfloat16_t));
 
-                // Stride between the start of two consecutive micropanels inside B_packed.
-                // We round it up to ensure alignment.
-                // See packB_avx2_bf16() for the B_packed layout explanation.
-                const int micropanel_stride_B = round_up(k_pad * NR, ALIGNMENT / sizeof(bfloat16_t));
+    //             // Stride between the start of two consecutive micropanels inside B_packed.
+    //             // We round it up to ensure alignment.
+    //             // See packB_avx2_bf16() for the B_packed layout explanation.
+    //             const int micropanel_stride_B = round_up(k_pad * NR, ALIGNMENT / sizeof(bfloat16_t));
 
-                // Each thread packs a cache level tile of B into a B_packed private buffer
-                packB_avx2_int8(
-                    &B[(k_cache * KC) * N + (j_cache * NC)], B_packed, 
-                    N, micropanel_stride_B, n_end, k_end, k_pad
-                );
+    //             // Each thread packs a cache level tile of B into a B_packed private buffer
+    //             packB_avx2_int8(
+    //                 &B[(k_cache * KC) * N + (j_cache * NC)], B_packed, 
+    //                 N, micropanel_stride_B, n_end, k_end, k_pad
+    //             );
 
-                // (i_cache < i_cache_end) here is equivalent to (i_cache * MC < M)
-                int i_cache_end = ceil_division(M, MC);
-                for (int i_cache = 0; i_cache < i_cache_end; ++i_cache) {
-                    int m_end = std::min(MC, M - i_cache * MC);
+    //             // (i_cache < i_cache_end) here is equivalent to (i_cache * MC < M)
+    //             int i_cache_end = ceil_division(M, MC);
+    //             for (int i_cache = 0; i_cache < i_cache_end; ++i_cache) {
+    //                 int m_end = std::min(MC, M - i_cache * MC);
 
-                    // Each thread packs a cache level tile of A into a A_packed private buffer
-                    packA_avx2_bf16(
-                        &A[(i_cache * MC) * K + (k_cache * KC)], A_packed, 
-                        K, micropanel_stride_A, m_end, k_end, k_pad
-                    );
+    //                 // Each thread packs a cache level tile of A into a A_packed private buffer
+    //                 packA_avx2_bf16(
+    //                     &A[(i_cache * MC) * K + (k_cache * KC)], A_packed, 
+    //                     K, micropanel_stride_A, m_end, k_end, k_pad
+    //                 );
             
-                    // Register level tiling
-                    // i_register * MR and j_register * NR are "the starting offsets of register level blocks inside the cache level blocks"
-                    int i_register = 0;
-                    for (; (i_register + 1) * MR <= m_end; ++i_register) {
-                        for (int j_register = 0; j_register * NR < n_end; ++j_register) {
-                            int n_remain = std::min(NR, n_end - j_register * NR);
-                            microkernel_8x8_avx2_bf16(
-                                &A_packed[i_register * micropanel_stride_A],
-                                &B_packed[j_register * micropanel_stride_B],
-                                &C[(i_cache * MC + i_register * MR) * N + (j_cache * NC + j_register * NR)],
-                                N, n_remain, k_pad,
-                                (k_cache == 0)
-                            );
-                        }
-                    }
+    //                 // Register level tiling
+    //                 // i_register * MR and j_register * NR are "the starting offsets of register level blocks inside the cache level blocks"
+    //                 int i_register = 0;
+    //                 for (; (i_register + 1) * MR <= m_end; ++i_register) {
+    //                     for (int j_register = 0; j_register * NR < n_end; ++j_register) {
+    //                         int n_remain = std::min(NR, n_end - j_register * NR);
+    //                         microkernel_8x8_avx2_bf16(
+    //                             &A_packed[i_register * micropanel_stride_A],
+    //                             &B_packed[j_register * micropanel_stride_B],
+    //                             &C[(i_cache * MC + i_register * MR) * N + (j_cache * NC + j_register * NR)],
+    //                             N, n_remain, k_pad,
+    //                             (k_cache == 0)
+    //                         );
+    //                     }
+    //                 }
                     
-                    // Cleanup in case m_end was not divisible by MR
-                    int m_remain = std::min(MR, m_end - i_register * MR);
-                    if (m_remain != 0) {
-                        for (int j_register = 0; j_register * NR < n_end; ++j_register) {
-                            int n_remain = std::min(NR, n_end - j_register * NR);
-                            microkernel_cleanup_avx2_bf16(
-                                &A_packed[i_register * micropanel_stride_A],
-                                &B_packed[j_register * micropanel_stride_B],
-                                &C[(i_cache * MC + i_register * MR) * N + (j_cache * NC + j_register * NR)],
-                                N, m_remain, n_remain, k_pad,
-                                (k_cache == 0)
-                            );
-                        }
-                    }
-                }
-            }
-        }
+    //                 // Cleanup in case m_end was not divisible by MR
+    //                 int m_remain = std::min(MR, m_end - i_register * MR);
+    //                 if (m_remain != 0) {
+    //                     for (int j_register = 0; j_register * NR < n_end; ++j_register) {
+    //                         int n_remain = std::min(NR, n_end - j_register * NR);
+    //                         microkernel_cleanup_avx2_bf16(
+    //                             &A_packed[i_register * micropanel_stride_A],
+    //                             &B_packed[j_register * micropanel_stride_B],
+    //                             &C[(i_cache * MC + i_register * MR) * N + (j_cache * NC + j_register * NR)],
+    //                             N, m_remain, n_remain, k_pad,
+    //                             (k_cache == 0)
+    //                         );
+    //                     }
+    //                 }
+    //             }
+    //         }
+    //     }
 
-        std::free(A_packed);
-        std::free(B_packed);
-    }
+    //     std::free(A_packed);
+    //     std::free(B_packed);
+    // }
 }
 
 inline void gemm_int8_tiled(const Matrix& A_base, const Matrix& B_base, Matrix& C_base) {
