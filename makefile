@@ -1,16 +1,17 @@
 # --- Configuration ---
 CXX          := dpcpp
-ONEDNN_ROOT  := ./oneDNN
 
 # Compiler Flags
-# -MMD -MP: Generates dependency files (.d) automatically
-CXXFLAGS     := -std=c++17 -Ofast -march=native -mavx2 -mfma -fopenmp
+# -fsycl: Necessary for dpcpp to link the correct SYCL/oneAPI runtimes
+CXXFLAGS     := -std=c++17 -Ofast -march=native -mavx2 -mfma -fopenmp -fsycl
 CXXFLAGS     += -MMD -MP
-CXXFLAGS     += -Iinclude -I$(ONEDNN_ROOT)/include -I$(ONEDNN_ROOT)/build/include
+# $(DNNLROOT) is set automatically when you run 'module load Intel_oneAPI_Toolkit_2021.2'
+CXXFLAGS     += -Iinclude -I$(DNNLROOT)/include
 
 # Linker Flags
-LDFLAGS      := -L$(ONEDNN_ROOT)/build/src
-LDFLAGS      += -Wl,-rpath,$(ONEDNN_ROOT)/build/src
+# Points to the optimized libraries provided by the module
+LDFLAGS      := -L$(DNNLROOT)/lib
+LDFLAGS      += -Wl,-rpath,$(DNNLROOT)/lib
 LDLIBS       := -ldnnl
 
 # --- Auto-Discovery ---
@@ -26,8 +27,6 @@ BINS := $(patsubst src/main_%.cpp,build/%,$(SRCS))
 all: $(BINS)
 
 # Build rule
-# The dependency file (build/xyz.d) is generated automatically by the compiler
-# due to the -MMD flag.
 build/%: src/main_%.cpp
 	@mkdir -p build
 	@echo "Building $@ from $<..."
@@ -37,6 +36,4 @@ clean:
 	rm -rf build
 
 # --- Dependency Inclusion ---
-# This line pulls in the generated dependency files.
-# The '-' at the start suppresses errors if the .d files don't exist yet.
 -include $(BINS:=.d)
