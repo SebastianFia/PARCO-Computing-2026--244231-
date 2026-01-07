@@ -1,7 +1,6 @@
 #pragma once
 
 #include "oneapi/dnnl/dnnl.hpp"
-
 #include "matrix.hpp"
 
 using namespace dnnl;
@@ -28,12 +27,15 @@ inline void gemm_onednn(const Matrix& A, const Matrix& B, Matrix& C) {
     auto b_md = memory::desc(b_dims, get_dnnl_type(B.dtype), memory::format_tag::ab);
     auto c_md = memory::desc(c_dims, get_dnnl_type(C.dtype), memory::format_tag::ab);
 
+    auto matmul_d = matmul::desc(a_md, b_md, c_md);
+
+    auto matmul_pd = matmul::primitive_desc(matmul_d, eng);
+
     auto a_mem = memory(a_md, eng, A.raw_data);
     auto b_mem = memory(b_md, eng, B.raw_data);
     auto c_mem = memory(c_md, eng, C.raw_data);
 
-    auto matmul_d = matmul::primitive_desc(eng, a_md, b_md, c_md);
-    auto matmul_prim = matmul(matmul_d);
+    auto matmul_prim = matmul(matmul_pd);
 
     matmul_prim.execute(engine_stream, {
         {DNNL_ARG_SRC, a_mem},
@@ -42,4 +44,3 @@ inline void gemm_onednn(const Matrix& A, const Matrix& B, Matrix& C) {
     });
     engine_stream.wait();
 }
-

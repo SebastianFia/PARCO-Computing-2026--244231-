@@ -9,3 +9,10 @@ constexpr inline int round_up(int a, int b) {
 constexpr inline int ceil_division(int a, int b) {
     return (a + b - 1) / b;
 }
+
+// Return val clamped between lo and hi
+constexpr inline int clamp(int val, int lo, int hi) {
+    if (val < lo) return lo;
+    if (val > hi) return hi;
+    return val;
+}
