@@ -1,5 +1,5 @@
 # --- Configuration ---
-CXX          := g++
+CXX          := dpcpp
 ONEDNN_ROOT  := ./oneDNN
 
 # Compiler Flags

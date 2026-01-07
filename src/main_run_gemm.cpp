@@ -98,7 +98,6 @@ void run_bench_gemm_bf16(int M, const MatrixFP32& B_ref, bool run_naive = false,
     // Tiled vs Naive comparison
     if (run_naive) {
         MatrixFP32 C_naive(M, B_ref.cols);
-
         double t_naive = benchmark_gemm(gemm_bf16_naive, A_bf16, B_bf16, C_naive);
         std::cout << "BF16 Naive:             " << t_naive << "s | " << ops/t_naive << " GFLOPS" << std::endl;
         std::cout << "--> Speedup vs Naive: " << t_naive/t_tiled << "x" << std::endl;
