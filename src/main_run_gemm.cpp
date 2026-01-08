@@ -79,7 +79,7 @@ void run_bench_gemm_bf16(int M, const MatrixFP32& B_ref, bool run_naive = false,
     // We use the FP32 matrices here to establish the "Hardware limit" for standard precision
     if (run_baseline) {
         MatrixFP32 C_onednn_fp32(M, B_ref.cols); // Output for Baseline
-        double t_base = benchmark_gemm(gemm_onednn, A_fp32, B_ref, C_onednn_fp32);
+        double t_base = benchmark_gemm(gemm_onednn_fp32, A_fp32, B_ref, C_onednn_fp32);
         // std::cout << "BASELINE (FP32 OneDNN): " << t_base << "s | " << ops/t_base << " GFLOPS" << std::endl;
 
         std::cout << "--> Gap to Baseline:  " << t_tiled/t_base << "x slower than FP32 OneDNN" << std::endl;

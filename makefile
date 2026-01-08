@@ -1,40 +1,39 @@
-# --- Configuration ---
-CXX          := dpcpp
+# Compiler settings
+CXX := dpcpp
+CXXFLAGS := -std=c++17 -O3 -I$(DNNLROOT)/include -Iinclude
+LDFLAGS := -L$(DNNLROOT)/lib -ldnnl -lpthread
 
-# The path to your GCC 9.1 module
-GCC91_LIB    := /apps/Modules/apps/gcc91/lib64
+# Directories
+SRC_DIR := src
+BUILD_DIR := build
 
-# Compiler Flags
-# We remove --gcc-toolchain to stop the "iostream not found" error
-# We keep -fsycl to ensure the oneAPI runtime is linked correctly
-CXXFLAGS     := -std=c++17 -Ofast -march=native -fopenmp -fsycl
-CXXFLAGS     += -D_GLIBCXX_USE_CXX11_ABI=1
-CXXFLAGS     += -MMD -MP
-CXXFLAGS     += -Iinclude -I$(DNNLROOT)/include
+# Find all main files (e.g., src/main_test.cpp, src/main_bench.cpp)
+MAIN_SRCS := $(wildcard $(SRC_DIR)/main_*.cpp)
+# Generate corresponding executable names in build/
+EXECUTABLES := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%,$(MAIN_SRCS))
 
-# Linker Flags
-# 1. Point to oneDNN libs
-# 2. Point to GCC 9.1 libs (to fix the GLIBCXX_3.4.21 errors)
-LDFLAGS      := -L$(DNNLROOT)/lib -L$(GCC91_LIB)
-LDFLAGS      += -Wl,-rpath,$(DNNLROOT)/lib
-LDFLAGS      += -Wl,-rpath,$(GCC91_LIB)
-LDLIBS       := -ldnnl
+# Shared object files (gemm_onednn implementation)
+COMMON_SRCS := $(SRC_DIR)/gemm_onednn.cpp
+COMMON_OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(COMMON_SRCS))
 
-# --- Auto-Discovery ---
-SRCS := $(wildcard src/main_*.cpp)
-BINS := $(patsubst src/main_%.cpp,build/%,$(SRCS))
+# Default target
+all: $(BUILD_DIR) $(EXECUTABLES)
 
-# --- Targets ---
-.PHONY: all clean
+# Create build directory
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
 
-all: $(BINS)
+# Rule to build the common implementation object
+$(BUILD_DIR)/gemm_onednn.o: $(SRC_DIR)/gemm_onednn.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-build/%: src/main_%.cpp
-	@mkdir -p build
-	@echo "Building $@..."
-	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS) $(LDLIBS)
+# Rule to build each main executable
+# Links the specific main object with the common gemm_onednn object
+$(BUILD_DIR)/%: $(SRC_DIR)/%.cpp $(COMMON_OBJS)
+	$(CXX) $(CXXFLAGS) $< $(COMMON_OBJS) -o $@ $(LDFLAGS)
 
+# Clean target
 clean:
-	rm -rf build
+	rm -rf $(BUILD_DIR)
 
--include $(BINS:=.d)
+.PHONY: all clean
