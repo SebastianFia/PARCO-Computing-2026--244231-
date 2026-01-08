@@ -1,6 +1,6 @@
 # Compiler and Flags
 CXX := dpcpp
-CXXFLAGS := -std=c++17 -O3 -I$(DNNLROOT)/include -Iinclude
+CXXFLAGS := -std=c++17 -mavx2 -mfma -fopenmp -O3 -I$(DNNLROOT)/include -Iinclude
 LDFLAGS  := -L$(DNNLROOT)/lib -ldnnl -lpthread
 
 # Directories
