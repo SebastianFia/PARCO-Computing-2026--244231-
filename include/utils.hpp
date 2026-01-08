@@ -12,7 +12,11 @@ constexpr inline int ceil_division(int a, int b) {
 
 // Return val clamped between lo and hi
 constexpr inline int clamp(int val, int lo, int hi) {
-    if (val < lo) return lo;
-    if (val > hi) return hi;
-    return val;
+    if (val < lo) {
+        return lo; 
+    } else if (val > hi) {
+        return hi;
+    } else {
+        return val;
+    }
 }

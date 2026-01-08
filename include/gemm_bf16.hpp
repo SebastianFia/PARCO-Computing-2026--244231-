@@ -447,6 +447,7 @@ inline void packB_avx2_bf16(
             B_packed[j_register * micropanel_stride + k * NR + j] = src_val;
         }
     }
+    
 }
 
 inline void gemm_bf16_avx2_tiled_parallel_N(

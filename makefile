@@ -1,39 +1,41 @@
 # --- Configuration ---
 CXX          := dpcpp
 
+# Unitn Hpc cluster path for gcc91 module
+GCC_TOOLCHAIN := /apps/Modules/apps/gcc91
+
 # Compiler Flags
-# -fsycl: Necessary for dpcpp to link the correct SYCL/oneAPI runtimes
-CXXFLAGS     := -std=c++17 -Ofast -march=native -mavx2 -mfma -fopenmp -fsycl
+# --gcc-toolchain: Forces dpcpp to use GCC 9.1 headers and ABI
+# -D_GLIBCXX_USE_CXX11_ABI=1: Ensures string/list types match oneDNN's requirements
+CXXFLAGS     := -std=c++17 -Ofast -march=native -fopenmp -fsycl
+CXXFLAGS     += --gcc-toolchain=$(GCC_TOOLCHAIN)
+CXXFLAGS     += -D_GLIBCXX_USE_CXX11_ABI=1
 CXXFLAGS     += -MMD -MP
-# $(DNNLROOT) is set automatically when you run 'module load Intel_oneAPI_Toolkit_2021.2'
 CXXFLAGS     += -Iinclude -I$(DNNLROOT)/include
 
 # Linker Flags
-# Points to the optimized libraries provided by the module
-LDFLAGS      := -L$(DNNLROOT)/lib
+# We include rpath for both oneDNN and the GCC 9.1 libraries so it runs correctly
+LDFLAGS      := -L$(DNNLROOT)/lib -L$(GCC_TOOLCHAIN)/lib64
+LDFLAGS      += --gcc-toolchain=$(GCC_TOOLCHAIN)
 LDFLAGS      += -Wl,-rpath,$(DNNLROOT)/lib
+LDFLAGS      += -Wl,-rpath,$(GCC_TOOLCHAIN)/lib64
 LDLIBS       := -ldnnl
 
 # --- Auto-Discovery ---
-# 1. Find sources: src/main_xyz.cpp
 SRCS := $(wildcard src/main_*.cpp)
-
-# 2. Define targets: src/main_xyz.cpp -> build/xyz
 BINS := $(patsubst src/main_%.cpp,build/%,$(SRCS))
 
 # --- Targets ---
-.PHONY: all clean info
+.PHONY: all clean
 
 all: $(BINS)
 
-# Build rule
 build/%: src/main_%.cpp
 	@mkdir -p build
-	@echo "Building $@ from $<..."
+	@echo "Building $@ using GCC Toolchain at $(GCC_TOOLCHAIN)..."
 	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS) $(LDLIBS)
 
 clean:
 	rm -rf build
 
-# --- Dependency Inclusion ---
 -include $(BINS:=.d)
