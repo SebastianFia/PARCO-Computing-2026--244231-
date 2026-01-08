@@ -1,24 +1,23 @@
 # --- Configuration ---
 CXX          := dpcpp
 
-# Unitn Hpc cluster path for gcc91 module
-GCC_TOOLCHAIN := /apps/Modules/apps/gcc91
+# The path to your GCC 9.1 module
+GCC91_LIB    := /apps/Modules/apps/gcc91/lib64
 
 # Compiler Flags
-# --gcc-toolchain: Forces dpcpp to use GCC 9.1 headers and ABI
-# -D_GLIBCXX_USE_CXX11_ABI=1: Ensures string/list types match oneDNN's requirements
+# We remove --gcc-toolchain to stop the "iostream not found" error
+# We keep -fsycl to ensure the oneAPI runtime is linked correctly
 CXXFLAGS     := -std=c++17 -Ofast -march=native -fopenmp -fsycl
-CXXFLAGS     += --gcc-toolchain=$(GCC_TOOLCHAIN)
 CXXFLAGS     += -D_GLIBCXX_USE_CXX11_ABI=1
 CXXFLAGS     += -MMD -MP
 CXXFLAGS     += -Iinclude -I$(DNNLROOT)/include
 
 # Linker Flags
-# We include rpath for both oneDNN and the GCC 9.1 libraries so it runs correctly
-LDFLAGS      := -L$(DNNLROOT)/lib -L$(GCC_TOOLCHAIN)/lib64
-LDFLAGS      += --gcc-toolchain=$(GCC_TOOLCHAIN)
+# 1. Point to oneDNN libs
+# 2. Point to GCC 9.1 libs (to fix the GLIBCXX_3.4.21 errors)
+LDFLAGS      := -L$(DNNLROOT)/lib -L$(GCC91_LIB)
 LDFLAGS      += -Wl,-rpath,$(DNNLROOT)/lib
-LDFLAGS      += -Wl,-rpath,$(GCC_TOOLCHAIN)/lib64
+LDFLAGS      += -Wl,-rpath,$(GCC91_LIB)
 LDLIBS       := -ldnnl
 
 # --- Auto-Discovery ---
@@ -32,7 +31,7 @@ all: $(BINS)
 
 build/%: src/main_%.cpp
 	@mkdir -p build
-	@echo "Building $@ using GCC Toolchain at $(GCC_TOOLCHAIN)..."
+	@echo "Building $@..."
 	$(CXX) $(CXXFLAGS) $< -o $@ $(LDFLAGS) $(LDLIBS)
 
 clean:
