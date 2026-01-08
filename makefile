@@ -1,38 +1,47 @@
-# Compiler settings
+# Compiler and Flags
 CXX := dpcpp
 CXXFLAGS := -std=c++17 -O3 -I$(DNNLROOT)/include -Iinclude
-LDFLAGS := -L$(DNNLROOT)/lib -ldnnl -lpthread
+LDFLAGS  := -L$(DNNLROOT)/lib -ldnnl -lpthread
 
 # Directories
-SRC_DIR := src
+SRC_DIR   := src
 BUILD_DIR := build
 
-# Find all main files (e.g., src/main_test.cpp, src/main_bench.cpp)
-MAIN_SRCS := $(wildcard $(SRC_DIR)/main_*.cpp)
-# Generate corresponding executable names in build/
-EXECUTABLES := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%,$(MAIN_SRCS))
+# 1. Find all .cpp files in src/
+ALL_SRCS := $(wildcard $(SRC_DIR)/*.cpp)
 
-# Shared object files (gemm_onednn implementation)
-COMMON_SRCS := $(SRC_DIR)/gemm_onednn.cpp
+# 2. Separate "Mains" from "Common" files
+# Any file starting with "src/main_" is treated as an executable entry point.
+MAIN_SRCS := $(filter $(SRC_DIR)/main_%.cpp, $(ALL_SRCS))
+
+# Any file NOT starting with "src/main_" is treated as common code to be compiled and linked.
+COMMON_SRCS := $(filter-out $(SRC_DIR)/main_%.cpp, $(ALL_SRCS))
+
+# 3. Define Output Artifacts
+# Convert common .cpp files to .o files in the build folder
 COMMON_OBJS := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%.o,$(COMMON_SRCS))
 
-# Default target
+# Convert main .cpp files to executables in the build folder (strip extension)
+EXECUTABLES := $(patsubst $(SRC_DIR)/%.cpp,$(BUILD_DIR)/%,$(MAIN_SRCS))
+
+# --- Targets ---
+
 all: $(BUILD_DIR) $(EXECUTABLES)
 
-# Create build directory
+# Create build directory if it doesn't exist
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
 
-# Rule to build the common implementation object
-$(BUILD_DIR)/gemm_onednn.o: $(SRC_DIR)/gemm_onednn.cpp
+# Rule to compile Common Objects (e.g., gemm_onednn.cpp -> build/gemm_onednn.o)
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-# Rule to build each main executable
-# Links the specific main object with the common gemm_onednn object
-$(BUILD_DIR)/%: $(SRC_DIR)/%.cpp $(COMMON_OBJS)
+# Rule to compile and link Executables
+# Uses a Static Pattern Rule: targets: target-pattern: prereq-patterns
+# This says: "For every executable, it depends on its specific .cpp file AND ALL common objects"
+$(EXECUTABLES): $(BUILD_DIR)/%: $(SRC_DIR)/%.cpp $(COMMON_OBJS)
 	$(CXX) $(CXXFLAGS) $< $(COMMON_OBJS) -o $@ $(LDFLAGS)
 
-# Clean target
 clean:
 	rm -rf $(BUILD_DIR)
 
