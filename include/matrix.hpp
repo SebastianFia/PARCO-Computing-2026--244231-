@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "bfloat16.hpp"
+#include "utils.hpp"
 
 constexpr size_t ALIGNMENT = 64; // For avx2 and cache line alignment
 
@@ -22,7 +23,7 @@ struct Matrix {
 
     Matrix(int r, int c, size_t d_sz, DType d_type) 
         : rows(r), cols(c), dtype_size(d_sz), dtype(d_type) {
-        size_t bytes = rows * cols * dtype_size;
+        size_t bytes = round_up(rows * cols * dtype_size, ALIGNMENT);
         raw_data = static_cast<char*>(aligned_alloc(ALIGNMENT, bytes));
         assert(raw_data != NULL && "Allocation failed");
         std::memset(raw_data, 0, bytes);
