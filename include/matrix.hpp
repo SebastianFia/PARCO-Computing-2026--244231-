@@ -30,7 +30,40 @@ struct Matrix {
     }
 
     virtual ~Matrix() {
-        std::free(raw_data);
+        if (raw_data) { // Check if valid
+            std::free(raw_data);
+            raw_data = nullptr;
+        }
+    }
+
+    Matrix(const Matrix&) = delete;
+
+    Matrix& operator=(const Matrix&) = delete;
+
+    Matrix(Matrix&& other) noexcept 
+        : rows(other.rows), cols(other.cols), 
+          dtype_size(other.dtype_size), dtype(other.dtype), 
+          raw_data(other.raw_data) {
+        other.raw_data = nullptr; 
+        other.rows = 0;
+        other.cols = 0;
+    }
+
+    Matrix& operator=(Matrix&& other) noexcept {
+        if (this != &other) {
+            if (raw_data) std::free(raw_data);
+            
+            rows = other.rows;
+            cols = other.cols;
+            dtype_size = other.dtype_size;
+            dtype = other.dtype;
+            raw_data = other.raw_data;
+
+            other.raw_data = nullptr;
+            other.rows = 0;
+            other.cols = 0;
+        }
+        return *this;
     }
 };
 
