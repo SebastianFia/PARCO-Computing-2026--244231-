@@ -116,57 +116,57 @@ void run_bench_gemm_bf16(int M, const MatrixFP32& B_ref, bool run_naive = false,
     }
 }
 
-// // Benchmarks our tiled int8 gemm implementation (optionally compares to Baseline and/or naive implementation)
-// void run_bench_gemm_int8(int M, const MatrixFP32& B_ref, bool run_naive = false, bool run_baseline = false, bool verbose = false) {
-//     MatrixFP32 A_fp32 = generate_random_fp32(M, B_ref.rows);
-//     MatrixINT8 A_int8(A_fp32);
-//     MatrixINT8 B_int8(B_ref);
-//     MatrixINT32 C_tiled(M, B_ref.cols);
+// Benchmarks our tiled int8 gemm implementation (optionally compares to Baseline and/or naive implementation)
+void run_bench_gemm_int8(int M, const MatrixFP32& B_ref, bool run_naive = false, bool run_baseline = false, bool verbose = false) {
+    MatrixFP32 A_fp32 = generate_random_fp32(M, B_ref.rows);
+    MatrixINT8 A_int8(A_fp32);
+    MatrixINT8 B_int8(B_ref);
+    MatrixINT32 C_tiled(M, B_ref.cols);
 
-//     double ops = 2.0 * M * B_ref.cols * B_ref.rows * 1e-9;
+    double ops = 2.0 * M * B_ref.cols * B_ref.rows * 1e-9;
 
-//     double t_tiled = benchmark_gemm(gemm_int8_tiled, A_int8, B_int8, C_tiled);
-//     std::cout << "INT8 Tiled:  " << t_tiled << "s | " << ops/t_tiled << " GOPS" << std::endl;
+    double t_tiled = benchmark_gemm(gemm_int8_tiled, A_int8, B_int8, C_tiled);
+    std::cout << "INT8 Tiled:  " << t_tiled << "s | " << ops/t_tiled << " GOPS" << std::endl;
 
-//     if (run_naive) {
-//         MatrixINT32 C_naive(M, B_ref.cols);
-//         double t_naive = benchmark_gemm(gemm_int8_naive, A_int8, B_int8, C_naive);
-//         std::cout << "INT8 Naive:  " << t_naive << "s | " << ops/t_naive << " GOPS" << std::endl;
+    if (run_naive) {
+        MatrixINT32 C_naive(M, B_ref.cols);
+        double t_naive = benchmark_gemm(gemm_int8_naive, A_int8, B_int8, C_naive);
+        std::cout << "INT8 Naive:  " << t_naive << "s | " << ops/t_naive << " GOPS" << std::endl;
 
-//         if (verbose) {
-//             int32_t max_err = 0;
-//             int32_t* c1 = reinterpret_cast<int32_t*>(C_tiled.raw_data);
-//             int32_t* c2 = reinterpret_cast<int32_t*>(C_naive.raw_data);
+        if (verbose) {
+            int32_t max_err = 0;
+            int32_t* c1 = reinterpret_cast<int32_t*>(C_tiled.raw_data);
+            int32_t* c2 = reinterpret_cast<int32_t*>(C_naive.raw_data);
 
-//             for(int i=0; i<M*B_ref.cols; ++i) {
-//                 max_err = std::max(max_err, std::abs(c1[i] - c2[i]));
-//             }
+            for(int i=0; i<M*B_ref.cols; ++i) {
+                max_err = std::max(max_err, std::abs(c1[i] - c2[i]));
+            }
 
-//             std::cout << "Max Diff (Tiled vs Naive): " << max_err << std::endl;
-//         }
-//     }
+            std::cout << "Max Diff (Tiled vs Naive): " << max_err << std::endl;
+        }
+    }
 
-//     if (run_baseline) {
-//         try {
-//             MatrixINT32 C_onednn(M, B_ref.cols);
-//             double t_dnnl = benchmark_gemm(gemm_onednn, A_int8, B_int8, C_onednn);
-//             std::cout << "INT8 OneDNN: " << t_dnnl << "s | " << ops/t_dnnl << " GOPS" << std::endl;
+    if (run_baseline) {
+        try {
+            MatrixINT32 C_onednn(M, B_ref.cols);
+            double t_dnnl = benchmark_gemm(gemm_onednn_s8s8s32, A_int8, B_int8, C_onednn);
+            std::cout << "INT8 OneDNN: " << t_dnnl << "s | " << ops/t_dnnl << " GOPS" << std::endl;
             
-//             if (verbose) {
-//                 int32_t max_err = 0;
-//                 int32_t* c1 = reinterpret_cast<int32_t*>(C_tiled.raw_data);
-//                 int32_t* c2 = reinterpret_cast<int32_t*>(C_onednn.raw_data);
+            if (verbose) {
+                int32_t max_err = 0;
+                int32_t* c1 = reinterpret_cast<int32_t*>(C_tiled.raw_data);
+                int32_t* c2 = reinterpret_cast<int32_t*>(C_onednn.raw_data);
 
-//                 for(int i=0; i<M*B_ref.cols; ++i) {
-//                     max_err = std::max(max_err, std::abs(c1[i] - c2[i]));
-//                 }
-//                 std::cout << "Max Diff (Tiled vs OneDNN): " << max_err << std::endl;
-//             }
-//         } catch (const dnnl::error& e) {
-//             std::cout << "INT8 OneDNN skipped: " << e.message << std::endl;
-//         }
-//     }
-// }
+                for(int i=0; i<M*B_ref.cols; ++i) {
+                    max_err = std::max(max_err, std::abs(c1[i] - c2[i]));
+                }
+                std::cout << "Max Diff (Tiled vs OneDNN): " << max_err << std::endl;
+            }
+        } catch (const dnnl::error& e) {
+            std::cout << "INT8 OneDNN skipped: " << e.message << std::endl;
+        }
+    }
+}
 
 int main() {
     std::cout << "omp max threads: " << omp_get_max_threads() << std::endl;

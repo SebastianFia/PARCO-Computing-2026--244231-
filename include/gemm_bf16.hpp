@@ -337,6 +337,69 @@ inline void packA_avx512_bf16(
     }
 }
 
+/* Pack A
+   
+   Layout:
+   - Strips of height MR=16.
+   - Inside a strip, data is stored column-wise (column-major).
+   - A_packed[i_register * micropanel_stride + k * MR + i]
+*/
+inline void packA_scalar_bf16(
+    const bfloat16_t *__restrict__ A_tile,
+    bfloat16_t *__restrict__ A_packed,
+    int A_stride,
+    int micropanel_stride,
+    int m_end, int k_end, int k_pad
+) {
+    constexpr int MR = M_REGISTER_TILE_BF16; // 16
+    int i_register = 0;
+
+    // Main loop, process MRxMR blocks for better locality
+    for (; (i_register + 1) * MR <= m_end; ++i_register) {
+        int row_offset = i_register * MR;
+        int panel_offset = i_register * micropanel_stride;
+
+        // Ideally, here we could use avx512 to transpose the MR x MR blocks
+        // Iterate over columns k
+        for (int k = 0; k < k_end; ++k) {
+            // For each column, copy MR rows contiguously (transposing from row-major source)
+            for (int i = 0; i < MR; ++i) {
+                // Src: A[row + i][k]
+                // Dst: Micropanel[k][i]
+                A_packed[panel_offset + k * MR + i] = A_tile[(row_offset + i) * A_stride + k];
+            }
+        }
+
+        // Zero padding for k (if k_pad > k_end)
+        for (int k = k_end; k < k_pad; ++k) {
+            for (int i = 0; i < MR; ++i) {
+                A_packed[panel_offset + k * MR + i] = 0;
+            }
+        }
+    }
+
+    // Cleanup loop: Process remaining rows (m_remain < MR)
+    // The layout here packs only 'm_remain' elements per column, not MR.
+    int m_remain = m_end - i_register * MR;
+    if (m_remain > 0) {
+        int row_offset = i_register * MR;
+        int panel_offset = i_register * micropanel_stride;
+
+        for (int k = 0; k < k_end; ++k) {
+            for (int i = 0; i < m_remain; ++i) {
+                A_packed[panel_offset + k * m_remain + i] = A_tile[(row_offset + i) * A_stride + k];
+            }
+        }
+
+        // Zero padding for k
+        for (int k = k_end; k < k_pad; ++k) {
+            for (int i = 0; i < m_remain; ++i) {
+                A_packed[panel_offset + k * m_remain + i] = 0;
+            }
+        }
+    }
+}
+
 /* Pack B (AVX-512)
     Uses 256-bit load/store instructions to move 16 bf16s (32 bytes) at once.
 */
@@ -436,7 +499,7 @@ inline void gemm_bf16_avx512_tiled_parallel_N(
                 for (int i_cache = 0; i_cache < i_cache_end; ++i_cache) {
                     int m_end = std::min(MC, M - i_cache * MC);
 
-                    packA_avx512_bf16(
+                    packA_scalar_bf16(
                         &A[(i_cache * MC) * K + (k_cache * KC)], A_packed, 
                         K, micropanel_stride_A, m_end, k_end, k_pad
                     );
@@ -524,7 +587,7 @@ inline void gemm_bf16_avx512_tiled_parallel_M(
                 for (int i_cache = 0; i_cache < i_cache_end; ++i_cache) {
                     int m_end = std::min(MC, M - i_cache * MC);
 
-                    packA_avx512_bf16(
+                    packA_scalar_bf16(
                         &A[(i_cache * MC) * K + (k_cache * KC)], A_packed, 
                         K, micropanel_stride_A, m_end, k_end, k_pad
                     );
