@@ -4,6 +4,8 @@
 #include <cassert>
 #include <omp.h>
 
+#include "oneapi/dnnl/dnnl.hpp"
+
 #include "matrix.hpp"
 #include "gemm_bf16.hpp"
 #include "gemm_int8.hpp"
@@ -71,8 +73,8 @@ void run_bench_gemm_bf16(int M, const MatrixFP32& B_ref, bool run_naive = false,
     double ops = 2.0 * M * B_ref.cols * B_ref.rows * 1e-9;
 
     // Run BF16 Tiled (Emulated)
-    // double t_tiled = benchmark_gemm(gemm_bf16_tiled, A_bf16, B_bf16, C_tiled);
-    // std::cout << "BF16 Tiled:             " << t_tiled << "s | " << ops/t_tiled << " GFLOPS" << std::endl;
+    double t_tiled = benchmark_gemm(gemm_bf16_tiled, A_bf16, B_bf16, C_tiled);
+    std::cout << "BF16 Tiled:             " << t_tiled << "s | " << ops/t_tiled << " GFLOPS" << std::endl;
 
 
     // Tiled vs BASELINE (OneDNN FP32) comparison
@@ -82,36 +84,36 @@ void run_bench_gemm_bf16(int M, const MatrixFP32& B_ref, bool run_naive = false,
         double t_base = benchmark_gemm(gemm_onednn_fp32, A_fp32, B_ref, C_onednn_fp32);
         std::cout << "BASELINE (FP32 OneDNN): " << t_base << "s | " << ops/t_base << " GFLOPS" << std::endl;
 
-        // std::cout << "--> Gap to Baseline:  " << t_tiled/t_base << "x slower than FP32 OneDNN" << std::endl;
+        std::cout << "--> Gap to Baseline:  " << t_tiled/t_base << "x slower than FP32 OneDNN" << std::endl;
 
-        // if (verbose) {
-        //     float max_err = 0;
-        //     float* c1 = reinterpret_cast<float*>(C_tiled.raw_data);
-        //     float* c2 = reinterpret_cast<float*>(C_onednn_fp32.raw_data);
-        //     for(int i=0; i<M*B_ref.cols; ++i) {
-        //         max_err = std::max(max_err, std::abs(c1[i] - c2[i]));
-        //     }
-        //     std::cout << "Max Diff (Tiled vs OneDNN): " << max_err << std::endl;
-        // }
+        if (verbose) {
+            float max_err = 0;
+            float* c1 = reinterpret_cast<float*>(C_tiled.raw_data);
+            float* c2 = reinterpret_cast<float*>(C_onednn_fp32.raw_data);
+            for(int i=0; i<M*B_ref.cols; ++i) {
+                max_err = std::max(max_err, std::abs(c1[i] - c2[i]));
+            }
+            std::cout << "Max Diff (Tiled vs OneDNN): " << max_err << std::endl;
+        }
     }
 
     // Tiled vs Naive comparison
-    // if (run_naive) {
-    //     MatrixFP32 C_naive(M, B_ref.cols);
-    //     double t_naive = benchmark_gemm(gemm_bf16_naive, A_bf16, B_bf16, C_naive);
-    //     std::cout << "BF16 Naive:             " << t_naive << "s | " << ops/t_naive << " GFLOPS" << std::endl;
-    //     std::cout << "--> Speedup vs Naive: " << t_naive/t_tiled << "x" << std::endl;
+    if (run_naive) {
+        MatrixFP32 C_naive(M, B_ref.cols);
+        double t_naive = benchmark_gemm(gemm_bf16_naive, A_bf16, B_bf16, C_naive);
+        std::cout << "BF16 Naive:             " << t_naive << "s | " << ops/t_naive << " GFLOPS" << std::endl;
+        std::cout << "--> Speedup vs Naive: " << t_naive/t_tiled << "x" << std::endl;
 
-    //     if (verbose) {
-    //         float max_err = 0;
-    //         float* c1 = reinterpret_cast<float*>(C_naive.raw_data);
-    //         float* c2 = reinterpret_cast<float*>(C_tiled.raw_data);
-    //         for(int i=0; i<M*B_ref.cols; ++i) {
-    //             max_err = std::max(max_err, std::abs(c1[i] - c2[i]));
-    //         }
-    //         std::cout << "Max Diff (Naive vs Tiled): " << max_err << std::endl;
-    //     }
-    // }
+        if (verbose) {
+            float max_err = 0;
+            float* c1 = reinterpret_cast<float*>(C_naive.raw_data);
+            float* c2 = reinterpret_cast<float*>(C_tiled.raw_data);
+            for(int i=0; i<M*B_ref.cols; ++i) {
+                max_err = std::max(max_err, std::abs(c1[i] - c2[i]));
+            }
+            std::cout << "Max Diff (Naive vs Tiled): " << max_err << std::endl;
+        }
+    }
 }
 
 // // Benchmarks our tiled int8 gemm implementation (optionally compares to Baseline and/or naive implementation)
@@ -167,7 +169,6 @@ void run_bench_gemm_bf16(int M, const MatrixFP32& B_ref, bool run_naive = false,
 // }
 
 int main() {
-    // const std::string weight_file = "matrices_data/bert_query.bin";
     std::cout << "omp max threads: " << omp_get_max_threads() << std::endl;
     
     // std::cout << "Loading Base Weight Matrix..." << std::endl;
