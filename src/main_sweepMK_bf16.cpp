@@ -44,7 +44,7 @@ double benchmark_gemm(
     }
 }
 
-int warmup_benchmarks(int M, int K, int N) {
+void warmup_benchmarks(int M, int K, int N) {
     MatrixFP32 A_fp32 = generate_random_fp32(M, K);
     MatrixFP32 B_fp32 = generate_random_fp32(K, N);
     
