@@ -61,7 +61,7 @@ void warmup_benchmarks(int M, int K, int N) {
 
 int main() {
     // Configuration
-    const int N = 768;
+    const int N = 1024;
     const std::string filename = "experiments_output/sweepMK_bf16.csv";
 
     
