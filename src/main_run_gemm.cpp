@@ -176,7 +176,7 @@ int main() {
     // std::cout << "Loaded " << B_ref.rows << "x" << B_ref.cols << std::endl;
 
     int N = 768;
-    int K = 8;
+    int K = 768;
     MatrixFP32 B_ref = generate_random_fp32(K, N);
 
     // for (int M: {1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024}) {
