@@ -8,7 +8,7 @@ DNNL_IOMP_ROOT := $(shell dirname $(DNNLROOT))/cpu_iomp
 CXX := dpcpp
 
 # Compile Flags
-CXXFLAGS := -std=c++17 -mavx512f -mavx512vnni -mfma -qopenmp -O3 \
+CXXFLAGS := -std=c++17 -mavx512f -mavx512vnni -mfma -qopenmp -O0 \
             -I$(DNNLROOT)/include -Iinclude \
             --gcc-toolchain=$(GCC_PATH)
 

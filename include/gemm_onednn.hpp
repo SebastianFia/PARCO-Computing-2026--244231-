@@ -24,8 +24,8 @@ inline void gemm_onednn_s8s8s32(const Matrix& A, const Matrix& B, Matrix& C) {
     memory::dim K = A.cols;
     memory::dim N = B.cols;
 
-    static engine eng(engine::kind::cpu, 0);
-    static stream s(eng);
+    engine eng(engine::kind::cpu, 0);
+    stream s(eng);
 
     auto a_md = memory::desc({M, K}, memory::data_type::s8, memory::format_tag::ab);
     auto b_md = memory::desc({K, N}, memory::data_type::s8, memory::format_tag::ab);
