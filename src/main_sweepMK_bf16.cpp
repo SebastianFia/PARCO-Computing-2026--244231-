@@ -81,7 +81,9 @@ int main() {
     // Checksum to prevent dead code optimization
     float checksum = 0;
 
-    // Run the benchmarks once for warmup
+    // Run the benchmarks some times for warmup
+    warmup_benchmarks(512, 512, N);
+    warmup_benchmarks(512, 512, N);
     warmup_benchmarks(512, 512, N);
 
     // Outer loop for M (powers of 2)

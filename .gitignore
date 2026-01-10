@@ -6,4 +6,5 @@
 /.valgrind_output
 /logs
 /oneDNN
+/plots
 sync-remote.bash
