@@ -183,8 +183,8 @@ int main() {
     // for (int M: {128, 128, 128, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096}) {
     for (int M: {128, 128, 128, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512}) {
         std::cout << "\nM=" << M << " K=" << K << " N=" << N << std::endl;
-        run_bench_gemm_bf16(M, B_ref, false, true, false);
-        // run_bench_gemm_int8(M, B_ref, false, true, false);
+        // run_bench_gemm_bf16(M, B_ref, false, true, false);
+        run_bench_gemm_int8(M, B_ref, false, true, false);
     }
 
     return 0;
