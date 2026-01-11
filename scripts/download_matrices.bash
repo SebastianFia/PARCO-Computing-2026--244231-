@@ -1,5 +1,5 @@
 PKGDIR=$HOME/.tmp_pkgs
-pip install --no-cache-dir --target "$PKGDIR" \
+pip3 install --no-cache-dir --target "$PKGDIR" \
     huggingface_hub \
     torch \
     transformers \
