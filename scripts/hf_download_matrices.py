@@ -103,10 +103,8 @@
 #     except Exception as e:
 #         print(f"Error: {e}")
 
-import torch
 from transformers import AutoModel, AutoModelForImageClassification
 import numpy as np
-import os
 
 # Configuration
 # Note: I have corrected the layer names below. 
