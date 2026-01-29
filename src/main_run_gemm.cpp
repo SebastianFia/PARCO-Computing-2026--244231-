@@ -174,14 +174,13 @@ int main() {
     // std::cout << "Loading Base Weight Matrix..." << std::endl;
     // MatrixFP32 B_ref = load_matrix_fp32(weight_file);
     // std::cout << "Loaded " << B_ref.rows << "x" << B_ref.cols << std::endl;
-
-    int N = 768;
-    int K = 768;
+    int N = 4096;
+    int K = 14336;
     MatrixFP32 B_ref = generate_random_fp32(K, N);
 
     // for (int M: {1, 2, 4, 8, 16, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024}) {
     // for (int M: {128, 128, 128, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096}) {
-    for (int M: {128, 128, 128, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512}) {
+    for (int M: {1, 2, 4, 8, 16}) {
         std::cout << "\nM=" << M << " K=" << K << " N=" << N << std::endl;
         // run_bench_gemm_bf16(M, B_ref, false, true, false);
         run_bench_gemm_int8(M, B_ref, false, true, false);
