@@ -37,12 +37,12 @@ constexpr int PARALLEL_M_THRESHOLD_INT8 = 64;
 
 /* Micro kernel for int8 GEMM (AVX-512 VNNI) with Compensation.
    
-   Math: 
-     We want: C += A_s8 * B_s8
-     HW does: dpbusd(A_u8, B_s8) = (A_s8 + 128) * B_s8
-                                 = A_s8 * B_s8 + 128 * B_s8
+    Math: 
+        We want: C += A_s8 * B_s8
+        HW does: dpbusd(A_u8, B_s8) = (A_s8 + 128) * B_s8
+                                    = A_s8 * B_s8 + 128 * B_s8
      
-     Correction: C += dpbusd(...) - (128 * sum(B_s8))
+        Correction: C += dpbusd(...) - (128 * sum(B_s8))
 */
 inline void microkernel_16x16_avx512_int8(
     const int8_t* __restrict__ A, 
