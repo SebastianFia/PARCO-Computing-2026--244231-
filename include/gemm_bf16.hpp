@@ -11,31 +11,30 @@
 #include "bfloat16.hpp"
 #include "utils.hpp"
 
-/*  Bf16 tiling sizes.
+/* Bf16 tiling sizes for AVX-512.
 
-    For padding correctness we assume that:
-    - M_CACHE_TILE_BF16 is a multiple of M_REGISTER_TILE_BF16
-    - N_CACHE_TILE_BF16 is a multiple of N_REGISTER_TILE_BF16
-    - K_CACHE_TILE_BF16 is a multiple of K_UNROLL_BF16
+    Changes from AVX2:
+    - Register tiles increased to 16x16 to exploit ZMM registers (16 floats per reg).
+    - Cache tiles tuned slightly for the increased throughput.
 */
-constexpr int M_CACHE_TILE_BF16 = 256;
+constexpr int M_CACHE_TILE_BF16 = 512;
 constexpr int N_CACHE_TILE_BF16 = 1024;
-constexpr int K_CACHE_TILE_BF16 = 256;
-constexpr int M_REGISTER_TILE_BF16 = 8; // avx2 has 16 YMM registers, we use 8 as accumulators, and the rest as tmp ones
-constexpr int N_REGISTER_TILE_BF16 = 8; // 8 floats in 256bit avx2 registers
-constexpr int K_UNROLL_BF16 = 4; // We will pad the k dimensions of cache level tiles to be divisible by this (we keep this low to avoid overhead for small K GEMM)
-constexpr int PARALLEL_M_THRESHOLD = 64; // We parallelize over M only if M is big enough
+constexpr int K_CACHE_TILE_BF16 = 512;
+constexpr int M_REGISTER_TILE_BF16 = 16; // AVX-512 ZMM holds 16 floats. We use 16 accumulators.
+constexpr int N_REGISTER_TILE_BF16 = 16; // 16 floats in 512bit ZMM register.
+constexpr int K_UNROLL_BF16 = 4; // Unroll factor
+constexpr int PARALLEL_M_THRESHOLD = 64; 
 
-/*  Micro kernel for bf16 GEMM.
+/* Micro kernel for bf16 GEMM (AVX-512).
     
     We will write to a [MR x n_remain] tile of C.
-
-    We assume the following: 
-    - MR == NR == 8.
-    - B_packed is expected to be zero padded to a size divisible by NR = 8, to allow seamless avx2 loading from it.
-    - The n_remain dimension can be any int from 1 to 8 inclusive, whereas MR=8 is fixed
+    
+    We assume: 
+    - MR == 16, NR == 16.
+    - B_packed is padded to multiples of NR (16).
+    - n_remain can be 1..16.
 */
-inline void microkernel_8x8_avx2_bf16(
+inline void microkernel_16x16_avx512_bf16(
     const bfloat16_t* __restrict__ A, 
     const bfloat16_t* __restrict__ B, 
     float* __restrict__ C, 
@@ -45,94 +44,78 @@ inline void microkernel_8x8_avx2_bf16(
     constexpr int MR = M_REGISTER_TILE_BF16;
     constexpr int NR = N_REGISTER_TILE_BF16;
 
-    static_assert(MR == 8, "microkernel_8x8_avx2_bf16 assumes MR == 8");
-    static_assert(NR == 8, "microkernel_8x8_avx2_bf16 assumes NR == 8");
+    static_assert(MR == 16, "microkernel assumes MR == 16");
+    static_assert(NR == 16, "microkernel assumes NR == 16");
 
-    // MR=8 output accumulators, each one containing NR=8 fp32 scalars. We will use only the first m_remain ones.
-    __m256 C_acc[MR];
+    // MR=16 output accumulators (ZMM registers)
+    __m512 C_acc[MR];
 
+    // Handling Accumulators
     if (first_k_block) {
-        // If we are at the first accumulation iteration, init to zero the local accumulator 
         #pragma unroll(MR)
         for (int i = 0; i < MR; ++i) {
-            C_acc[i] = _mm256_setzero_ps();
+            C_acc[i] = _mm512_setzero_ps();
         }
     } else {
-        // Otherwise we load from memory the partial sums
-        if (n_remain == NR) {
-            // When possible we load to the avx2 registers directly
-            #pragma unroll(MR)
-            for (int i = 0; i < MR; ++i) {
-                C_acc[i] = _mm256_loadu_ps(&C[i * C_stride]);
-            }
-        } else {
-            // Else we repeatedly load n_remain scalars into tmp, and then load with avx2 form tmp
-            float tmp[NR];
-            memset(tmp, 0, NR * sizeof(float));
-
-            #pragma unroll(MR)
-            for (int i = 0; i < MR; ++i) {
-                for (int j = 0; j < n_remain; ++j) {
-                    tmp[j] = C[i * C_stride + j];
-                }
-                C_acc[i] = _mm256_loadu_ps(tmp);
-            }
+        // Load partial sums. 
+        // We use masking for the load if n_remain < 16 to avoid reading OOB, 
+        // though strictly C is usually safe to over-read if padded, but masking is safer/cleaner in AVX512.
+        __mmask16 load_mask = (1U << n_remain) - 1;
+        
+        #pragma unroll(MR)
+        for (int i = 0; i < MR; ++i) {
+            C_acc[i] = _mm512_mask_loadu_ps(C_acc[i], load_mask, &C[i * C_stride]);
         }
     }
 
     // Hot loop
     #pragma unroll(K_UNROLL_BF16)
     for (int k = 0; k < k_pad; ++k) {
-        // Load from B 8 x 16bit scalars (bf16)
-        __m128i v_b_bf16 = _mm_load_si128(reinterpret_cast<const __m128i*>(&B[k * NR]));
-
-        // Convert from bf16 to fp32:
-        // 1. We upcast each 16 bit lane to 32 bits, by extending on the left with zeros
-        __m256i v_b_extended = _mm256_cvtepu16_epi32(v_b_bf16);
-        // 2. We shift left each 32bit lane by 16, so the original 16bits are on the left (and we have zeros on the right)
-        __m256 v_b = _mm256_castsi256_ps(_mm256_slli_epi32(v_b_extended, 16));
+        // 1. Load B: 16 bf16 values. This is 256 bits (32 bytes).
+        // We load it into a YMM (half ZMM) and then expand.
+        __m256i v_b_bf16_256 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&B[k * NR]));
+        
+        // Convert B from bf16 to fp32 (ZMM)
+        // Expand 16x16bit -> 16x32bit integers (zero extended)
+        __m512i v_b_extended = _mm512_cvtepu16_epi32(v_b_bf16_256);
+        // Shift left by 16 to move bits to high half
+        __m512 v_b = _mm512_castsi512_ps(_mm512_slli_epi32(v_b_extended, 16));
 
         #pragma unroll(MR)
         for (int i = 0; i < MR; ++i) {
-            // Convert from bf16 to fp32:
-            // 1. Read from A a 16bit scalar 0xABCD and broadcast it to all the 16 lanes of width 16bits
-            __m256i v_a_broadcast = _mm256_set1_epi16(A[k * MR + i]);
-            // 2. Shift left by 16bits all the 32bit lanes (each lane goes from 0xABCDABCD to 0xABCD0000), and reinterpret as float
-            __m256 v_a = _mm256_castsi256_ps(_mm256_slli_epi32(v_a_broadcast, 16));
+            // Load A: A is stored column-major within the micropanel, so A[k*MR + i] is adjacent.
+            // We need to broadcast the single scalar A[k, i] to all 16 lanes of the register.
+            
+            // Broadcast 16-bit value to all 32-bit elements of a ZMM
+            // (There isn't a direct set1_epi16 to ZMM that treats them as paired 32-bit slots conveniently for BF16,
+            // so we broadcast to 32-bit int, then shift).
+            // Actually, cleanest way for a single scalar:
+            __m512i v_a_broadcast = _mm512_set1_epi32((int)A[k * MR + i]); 
+            // Shift left to position the bf16 in the top of the float
+            __m512 v_a = _mm512_castsi512_ps(_mm512_slli_epi32(v_a_broadcast, 16));
 
-            // Fused multiply add: C_ij = A_j * B_j + C_ij
-            C_acc[i] = _mm256_fmadd_ps(v_a, v_b, C_acc[i]);
+            // Fused Multiply Add
+            C_acc[i] = _mm512_fmadd_ps(v_a, v_b, C_acc[i]);
         }
     }
 
     // Write back to C
-    if (n_remain == NR) {
-        // When possible write result to the [m_remain x 8] tile of C, with avx2
-        #pragma unroll(MR)
-        for (int i = 0; i < MR; ++i) {
-            _mm256_storeu_ps(&C[i * C_stride], C_acc[i]);
-        }     
-    } else {
-        // Else we write with avx2 to tmp, and from tmp store only n_remain values
-        float tmp[NR];
-        for (int i = 0; i < MR; ++i) {
-            _mm256_storeu_ps(tmp, C_acc[i]);
-            for (int j = 0; j < n_remain; ++j) {
-                C[i * C_stride + j] = tmp[j];
-            }
-        }
+    // We utilize AVX-512 masking to handle the n_remain case cleanly without a scalar loop.
+    __mmask16 store_mask = (1U << n_remain) - 1;
+
+    #pragma unroll(MR)
+    for (int i = 0; i < MR; ++i) {
+        _mm512_mask_storeu_ps(&C[i * C_stride], store_mask, C_acc[i]);
     }
 }
 
-/*  Cleanup micro kernel for bf16 GEMM.
+/* Cleanup micro kernel.
+    Handles cases where m_remain < MR.
     
-    We will write to a [m_remain x n_remain] tile of C.
-    B_packed is expected to be zero padded to a size divisible by NR = 8, to allow seamless avx2 loading from it.
-    The m_remain and n_remain dimensions can be any int from 1 to 8 inclusive.
-
-    We assume MR == NR == 8
+    Thanks to AVX-512 masking, this logic is much simpler than AVX2. 
+    We just loop up to m_remain and use masks for n_remain.
 */
-inline void microkernel_cleanup_avx2_bf16(
+inline void microkernel_cleanup_avx512_bf16(
     const bfloat16_t* __restrict__ A, 
     const bfloat16_t* __restrict__ B, 
     float* __restrict__ C, 
@@ -142,315 +125,332 @@ inline void microkernel_cleanup_avx2_bf16(
     constexpr int MR = M_REGISTER_TILE_BF16;
     constexpr int NR = N_REGISTER_TILE_BF16;
 
-    static_assert(MR == 8, "microkernel_cleanup_avx2_bf16 assumes MR == 8");
-    static_assert(NR == 8, "microkernel_cleanup_avx2_bf16 assumes NR == 8");
-
-    // MR=8 output accumulators, each one containing NR=8 fp32 scalars. We will use only the first m_remain ones.
-    __m256 C_acc[MR];
-
-    // In all the i loops we suggest the compiler to unroll by MR, since m_remain == MR == 8 is the 
-    // most common scenario in a GEMM with big enough M. Likely the compiler will generate unrolled
-    // loops with 8 copies of the loop body, and a cleanup loop afterwards.
+    // Accumulators (we only use the first m_remain ones)
+    __m512 C_acc[MR];
+    __mmask16 mask = (1U << n_remain) - 1;
 
     if (first_k_block) {
-        // If we are at the first accumulation iteration, init to zero the local accumulator 
         for (int i = 0; i < m_remain; ++i) {
-            C_acc[i] = _mm256_setzero_ps();
+            C_acc[i] = _mm512_setzero_ps();
         }
     } else {
-        // Otherwise we load from memory the partial sums
-        if (n_remain == NR) {
-            // When possible we load to the avx2 registers directly
-            for (int i = 0; i < m_remain; ++i) {
-                C_acc[i] = _mm256_loadu_ps(&C[i * C_stride]);
-            }
-        } else {
-            // Else we repeatedly load n_remain scalars into tmp, and then load with avx2 form tmp
-            float tmp[NR];
-            memset(tmp, 0, NR * sizeof(float));
-
-            for (int i = 0; i < m_remain; ++i) {
-                for (int j = 0; j < n_remain; ++j) {
-                    tmp[j] = C[i * C_stride + j];
-                }
-                C_acc[i] = _mm256_loadu_ps(tmp);
-            }
+        for (int i = 0; i < m_remain; ++i) {
+            C_acc[i] = _mm512_mask_loadu_ps(C_acc[i], mask, &C[i * C_stride]);
         }
     }
 
     // Hot loop
     #pragma unroll(K_UNROLL_BF16)
     for (int k = 0; k < k_pad; ++k) {
-        // Load from B 8 x 16bit scalars (bf16)
-        __m128i v_b_bf16 = _mm_load_si128(reinterpret_cast<const __m128i*>(&B[k * NR]));
-
-        // Convert from bf16 to fp32:
-        // 1. We upcast each 16 bit lane to 32 bits, by extending on the left with zeros
-        __m256i v_b_extended = _mm256_cvtepu16_epi32(v_b_bf16);
-        // 2. We shift left each 32bit lane by 16, so the original 16bits are on the left (and we have zeros on the right)
-        __m256 v_b = _mm256_castsi256_ps(_mm256_slli_epi32(v_b_extended, 16));
+        __m256i v_b_bf16_256 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(&B[k * NR]));
+        __m512i v_b_extended = _mm512_cvtepu16_epi32(v_b_bf16_256);
+        __m512 v_b = _mm512_castsi512_ps(_mm512_slli_epi32(v_b_extended, 16));
 
         for (int i = 0; i < m_remain; ++i) {
-            // Convert from bf16 to fp32:
-            // 1. Read from A a 16bit scalar 0xABCD and broadcast it to all the 16 lanes of width 16bits
-            __m256i v_a_broadcast = _mm256_set1_epi16(A[k * m_remain + i]);
-            // 2. Shift left by 16bits all the 32bit lanes (each lane goes from 0xABCDABCD to 0xABCD0000), and reinterpret as float
-            __m256 v_a = _mm256_castsi256_ps(_mm256_slli_epi32(v_a_broadcast, 16));
-
-            // Fused multiply add: C_ij = A_j * B_j + C_ij
-            C_acc[i] = _mm256_fmadd_ps(v_a, v_b, C_acc[i]);
+            __m512i v_a_broadcast = _mm512_set1_epi32((int)A[k * m_remain + i]);
+            __m512 v_a = _mm512_castsi512_ps(_mm512_slli_epi32(v_a_broadcast, 16));
+            C_acc[i] = _mm512_fmadd_ps(v_a, v_b, C_acc[i]);
         }
     }
 
-    // Write back to C
-    if (n_remain == NR) {
-        // When possible write result to the [m_remain x 8] tile of C, with avx2
-        for (int i = 0; i < m_remain; ++i) {
-            _mm256_storeu_ps(&C[i * C_stride], C_acc[i]);
-        }     
-    } else {
-        // Else we write with avx2 to tmp, and from tmp store only n_remain values
-        float tmp[NR];
-        for (int i = 0; i < m_remain; ++i) {
-            _mm256_storeu_ps(tmp, C_acc[i]);
-            for (int j = 0; j < n_remain; ++j) {
-                C[i * C_stride + j] = tmp[j];
-            }
-        }
+    // Store
+    for (int i = 0; i < m_remain; ++i) {
+        _mm512_mask_storeu_ps(&C[i * C_stride], mask, C_acc[i]);
     }
 }
 
-/*  Read a 8x8 block of bfloat16_t (uint16_t) from src matrix, transpose it with avx2 and write it to dst matrix.
+/* Read a 16x16 block of bfloat16_t from src, transpose it, and write to dst.
+    
+    16x16 block of bf16 = 256 scalars.
+    Row size = 16 * 2 bytes = 32 bytes (256 bits).
+    Column size = 16 * 2 bytes = 32 bytes (256 bits).
 
-    The transpose is performed as follows:
-    - At first we have 8 vector registers, each one containing a row of the matrix (8 scalars)
-    - We want to end up with 8 vector registers containing the columns of the matrix
-
-    Conceptually, to achieve this we "split" and "merge" recursively:
-    - Start from 8 [1 x 8] blocks (these are the initial rows, each one stored in a register)
-    - Stage 1: Split in 2 the blocks horizontally and merge pairs vertically into 2 new [2 x 4] "column major" blocks (each one stored in a register)
-    - Stage 2: Split in 2 the blocks horizontally and merge pairs vertically into 2 new [4 x 2] "column major" blocks (each one stored in a register)
-    - Stage 3: Split in 2 the blocks horizontally and merge pairs vertically into 2 new [8 x 1] "column major" blocks 
-        (these are the final columns, each one stored in a register)
-
-    Each "horizontal split" + "vertical merge" is done by unpacking and interleaving the columns of 
-    the blocks stored in the registers. In practice, this means that:
-    - Stage 1: we unpack and interleave groups of 16 bits ("columns" of 1 scalar)
-    - Stage 2: groups of 32 bits (columns of 2 scalars) 
-    - Stage 3: groups of 64 bits (columns of 4 scalars) 
-
-    In this way we keep a "column major" layout at each step. This leads at the end to the columns 
-    being stored contiguously in 8 registers, which we can finally write directly to dst.
+    Since the rows fit exactly into YMM registers (256-bit), we can perform the 
+    transpose using 16 YMM registers and standard recursive merge/split logic 
+    (depth 4) on __m256i. This avoids needing 32 ZMMs or complex permutations.
 */
-inline void transpose_8x8_avx2_bf16(
+inline void transpose_16x16_avx512_bf16(
     const bfloat16_t* __restrict__ src, 
     bfloat16_t* __restrict__ dst, 
     int src_stride, 
     int dst_stride
 ) {
-    // Here we declare 12 avx2 registers (out of 16)
-    // We will explicitly reuse these registers (to avoid spilling)
-    __m128i a0, a1, a2, a3, a4, a5, a6, a7, b0, b1, b2, b3; 
+    // We need 16 registers.
+    __m256i r0, r1, r2, r3, r4, r5, r6, r7, r8, r9, r10, r11, r12, r13, r14, r15;
+    __m256i t0, t1, t2, t3, t4, t5, t6, t7; // Temporaries
 
-    // Load 8x8 block from src to avx2 registers (8 avx2 registers, each one containing 8 x bf16)
-    a0 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(&src[src_stride * 0]));
-    a1 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(&src[src_stride * 1]));
-    a2 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(&src[src_stride * 2]));
-    a3 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(&src[src_stride * 3]));
-    a4 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(&src[src_stride * 4]));
-    a5 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(&src[src_stride * 5]));
-    a6 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(&src[src_stride * 6]));
-    a7 = _mm_loadu_si128(reinterpret_cast<const __m128i*>(&src[src_stride * 7]));
+    // Load 16 rows (32 bytes each)
+    r0 = _mm256_loadu_si256((const __m256i*)&src[0 * src_stride]);
+    r1 = _mm256_loadu_si256((const __m256i*)&src[1 * src_stride]);
+    r2 = _mm256_loadu_si256((const __m256i*)&src[2 * src_stride]);
+    r3 = _mm256_loadu_si256((const __m256i*)&src[3 * src_stride]);
+    r4 = _mm256_loadu_si256((const __m256i*)&src[4 * src_stride]);
+    r5 = _mm256_loadu_si256((const __m256i*)&src[5 * src_stride]);
+    r6 = _mm256_loadu_si256((const __m256i*)&src[6 * src_stride]);
+    r7 = _mm256_loadu_si256((const __m256i*)&src[7 * src_stride]);
+    r8 = _mm256_loadu_si256((const __m256i*)&src[8 * src_stride]);
+    r9 = _mm256_loadu_si256((const __m256i*)&src[9 * src_stride]);
+    r10 = _mm256_loadu_si256((const __m256i*)&src[10 * src_stride]);
+    r11 = _mm256_loadu_si256((const __m256i*)&src[11 * src_stride]);
+    r12 = _mm256_loadu_si256((const __m256i*)&src[12 * src_stride]);
+    r13 = _mm256_loadu_si256((const __m256i*)&src[13 * src_stride]);
+    r14 = _mm256_loadu_si256((const __m256i*)&src[14 * src_stride]);
+    r15 = _mm256_loadu_si256((const __m256i*)&src[15 * src_stride]);
 
-    // Stage 1: unpack and interleave groups of 16bits (1 scalar)
-    b0 = _mm_unpacklo_epi16(a0, a1);
-    b1 = _mm_unpackhi_epi16(a0, a1);
-    b2 = _mm_unpacklo_epi16(a2, a3);
-    b3 = _mm_unpackhi_epi16(a2, a3);
-    a0 = _mm_unpacklo_epi16(a4, a5); // Here we start reusing the free registers (from now on we keep "cycling" them, to avoid spilling)
-    a1 = _mm_unpackhi_epi16(a4, a5);
-    a2 = _mm_unpacklo_epi16(a6, a7);
-    a3 = _mm_unpackhi_epi16(a6, a7);
+    // Stage 1: Unpack 16-bit (1 scalar)
+    t0 = _mm256_unpacklo_epi16(r0, r1); t1 = _mm256_unpackhi_epi16(r0, r1);
+    t2 = _mm256_unpacklo_epi16(r2, r3); t3 = _mm256_unpackhi_epi16(r2, r3);
+    t4 = _mm256_unpacklo_epi16(r4, r5); t5 = _mm256_unpackhi_epi16(r4, r5);
+    t6 = _mm256_unpacklo_epi16(r6, r7); t7 = _mm256_unpackhi_epi16(r6, r7);
+    r0 = t0; r1 = t1; r2 = t2; r3 = t3; r4 = t4; r5 = t5; r6 = t6; r7 = t7;
 
-    // Stage 2: unpack and interleave groups of 32bits (2 scalars)
-    a4 = _mm_unpacklo_epi32(b0, b2);
-    a5 = _mm_unpackhi_epi32(b0, b2);
-    a6 = _mm_unpacklo_epi32(b1, b3);
-    a7 = _mm_unpackhi_epi32(b1, b3);
-    b0 = _mm_unpacklo_epi32(a0, a2);
-    b1 = _mm_unpackhi_epi32(a0, a2);
-    b2 = _mm_unpacklo_epi32(a1, a3);
-    b3 = _mm_unpackhi_epi32(a1, a3);
+    t0 = _mm256_unpacklo_epi16(r8, r9); t1 = _mm256_unpackhi_epi16(r8, r9);
+    t2 = _mm256_unpacklo_epi16(r10, r11); t3 = _mm256_unpackhi_epi16(r10, r11);
+    t4 = _mm256_unpacklo_epi16(r12, r13); t5 = _mm256_unpackhi_epi16(r12, r13);
+    t6 = _mm256_unpacklo_epi16(r14, r15); t7 = _mm256_unpackhi_epi16(r14, r15);
+    r8 = t0; r9 = t1; r10 = t2; r11 = t3; r12 = t4; r13 = t5; r14 = t6; r15 = t7;
 
-    // Stage 3: unpack and interleave groups of 64bits (4 scalars)
-    a0 = _mm_unpacklo_epi64(a4, b0);
-    a1 = _mm_unpackhi_epi64(a4, b0); 
-    a2 = _mm_unpacklo_epi64(a5, b1);
-    a3 = _mm_unpackhi_epi64(a5, b1);
-    a4 = _mm_unpacklo_epi64(a6, b2);
-    a5 = _mm_unpackhi_epi64(a6, b2);
-    b0 = _mm_unpacklo_epi64(a7, b3);
-    b1 = _mm_unpackhi_epi64(a7, b3);
+    // Stage 2: Unpack 32-bit (2 scalars)
+    t0 = _mm256_unpacklo_epi32(r0, r2); t1 = _mm256_unpackhi_epi32(r0, r2);
+    t2 = _mm256_unpacklo_epi32(r1, r3); t3 = _mm256_unpackhi_epi32(r1, r3);
+    t4 = _mm256_unpacklo_epi32(r4, r6); t5 = _mm256_unpackhi_epi32(r4, r6);
+    t6 = _mm256_unpacklo_epi32(r5, r7); t7 = _mm256_unpackhi_epi32(r5, r7);
+    r0 = t0; r1 = t1; r2 = t2; r3 = t3; r4 = t4; r5 = t5; r6 = t6; r7 = t7;
 
-    // We store the result to the 8x8 block of dst
-    _mm_storeu_si128(reinterpret_cast<__m128i*>(&dst[dst_stride * 0]), a0);
-    _mm_storeu_si128(reinterpret_cast<__m128i*>(&dst[dst_stride * 1]), a1);
-    _mm_storeu_si128(reinterpret_cast<__m128i*>(&dst[dst_stride * 2]), a2);
-    _mm_storeu_si128(reinterpret_cast<__m128i*>(&dst[dst_stride * 3]), a3);
-    _mm_storeu_si128(reinterpret_cast<__m128i*>(&dst[dst_stride * 4]), a4);
-    _mm_storeu_si128(reinterpret_cast<__m128i*>(&dst[dst_stride * 5]), a5);
-    _mm_storeu_si128(reinterpret_cast<__m128i*>(&dst[dst_stride * 6]), b0);
-    _mm_storeu_si128(reinterpret_cast<__m128i*>(&dst[dst_stride * 7]), b1);
+    t0 = _mm256_unpacklo_epi32(r8, r10); t1 = _mm256_unpackhi_epi32(r8, r10);
+    t2 = _mm256_unpacklo_epi32(r9, r11); t3 = _mm256_unpackhi_epi32(r9, r11);
+    t4 = _mm256_unpacklo_epi32(r12, r14); t5 = _mm256_unpackhi_epi32(r12, r14);
+    t6 = _mm256_unpacklo_epi32(r13, r15); t7 = _mm256_unpackhi_epi32(r13, r15);
+    r8 = t0; r9 = t1; r10 = t2; r11 = t3; r12 = t4; r13 = t5; r14 = t6; r15 = t7;
+
+    // Stage 3: Unpack 64-bit (4 scalars)
+    t0 = _mm256_unpacklo_epi64(r0, r4); t1 = _mm256_unpackhi_epi64(r0, r4);
+    t2 = _mm256_unpacklo_epi64(r1, r5); t3 = _mm256_unpackhi_epi64(r1, r5);
+    t4 = _mm256_unpacklo_epi64(r2, r6); t5 = _mm256_unpackhi_epi64(r2, r6);
+    t6 = _mm256_unpacklo_epi64(r3, r7); t7 = _mm256_unpackhi_epi64(r3, r7);
+    r0 = t0; r1 = t1; r2 = t2; r3 = t3; r4 = t4; r5 = t5; r6 = t6; r7 = t7;
+
+    t0 = _mm256_unpacklo_epi64(r8, r12); t1 = _mm256_unpackhi_epi64(r8, r12);
+    t2 = _mm256_unpacklo_epi64(r9, r13); t3 = _mm256_unpackhi_epi64(r9, r13);
+    t4 = _mm256_unpacklo_epi64(r10, r14); t5 = _mm256_unpackhi_epi64(r10, r14);
+    t6 = _mm256_unpacklo_epi64(r11, r15); t7 = _mm256_unpackhi_epi64(r11, r15);
+    r8 = t0; r9 = t1; r10 = t2; r11 = t3; r12 = t4; r13 = t5; r14 = t6; r15 = t7;
+
+    // Stage 4: Unpack 128-bit (8 scalars), we replicate unpacklo/hi with a more general permute instruction
+    t0 = _mm256_permute2x128_si256(r0, r8, 0x20);  // Lo 128bits of r0, Lo r8
+    t1 = _mm256_permute2x128_si256(r0, r8, 0x31);  // Hi r0, Hi r8
+    t2 = _mm256_permute2x128_si256(r1, r9, 0x20);
+    t3 = _mm256_permute2x128_si256(r1, r9, 0x31);
+    t4 = _mm256_permute2x128_si256(r2, r10, 0x20);
+    t5 = _mm256_permute2x128_si256(r2, r10, 0x31);
+    t6 = _mm256_permute2x128_si256(r3, r11, 0x20);
+    t7 = _mm256_permute2x128_si256(r3, r11, 0x31);
+    r0 = t0; r1 = t1; r2 = t2; r3 = t3; r4 = t4; r5 = t5; r6 = t6; r7 = t7;
+
+    t0 = _mm256_permute2x128_si256(r4, r12, 0x20);
+    t1 = _mm256_permute2x128_si256(r4, r12, 0x31);
+    t2 = _mm256_permute2x128_si256(r5, r13, 0x20);
+    t3 = _mm256_permute2x128_si256(r5, r13, 0x31);
+    t4 = _mm256_permute2x128_si256(r6, r14, 0x20);
+    t5 = _mm256_permute2x128_si256(r6, r14, 0x31);
+    t6 = _mm256_permute2x128_si256(r7, r15, 0x20);
+    t7 = _mm256_permute2x128_si256(r7, r15, 0x31);
+    r8 = t0; r9 = t1; r10 = t2; r11 = t3; r12 = t4; r13 = t5; r14 = t6; r15 = t7;
+
+    // Store
+    _mm256_storeu_si256((__m256i*)&dst[0 * dst_stride], r0);
+    _mm256_storeu_si256((__m256i*)&dst[1 * dst_stride], r1);
+    _mm256_storeu_si256((__m256i*)&dst[2 * dst_stride], r2);
+    _mm256_storeu_si256((__m256i*)&dst[3 * dst_stride], r3);
+    _mm256_storeu_si256((__m256i*)&dst[4 * dst_stride], r4);
+    _mm256_storeu_si256((__m256i*)&dst[5 * dst_stride], r5);
+    _mm256_storeu_si256((__m256i*)&dst[6 * dst_stride], r6);
+    _mm256_storeu_si256((__m256i*)&dst[7 * dst_stride], r7);
+    _mm256_storeu_si256((__m256i*)&dst[8 * dst_stride], r8);
+    _mm256_storeu_si256((__m256i*)&dst[9 * dst_stride], r9);
+    _mm256_storeu_si256((__m256i*)&dst[10 * dst_stride], r10);
+    _mm256_storeu_si256((__m256i*)&dst[11 * dst_stride], r11);
+    _mm256_storeu_si256((__m256i*)&dst[12 * dst_stride], r12);
+    _mm256_storeu_si256((__m256i*)&dst[13 * dst_stride], r13);
+    _mm256_storeu_si256((__m256i*)&dst[14 * dst_stride], r14);
+    _mm256_storeu_si256((__m256i*)&dst[15 * dst_stride], r15);
 }
 
-/*  Pack a cache level tile of A into the A_packed buffer using a layout optimized for the microkernel.
-
-    We employ the following nested layout so the data can be read contiguously by the microkernel: 
-    - A_packed contains ceil(m_end / MR) micropanels (i_register loop outside the microkernel)
-    - each micropanel contains k_pad columns (k loop in the microkernel)
-    - each column contains m_remain values (i loop in the microkernel); m_remain is always MR for all the columns, 
-        except for the columns of the last micropanel, where m_remain can be any int from 1 to MR
-
-    The data of A_packed is accessed as follows: 
-        A_packed[i_register * micropanel_stride + k * m_remain + i]
-
-    As said before, m_remain == MR in general, except possibly for the last micropanel.
-
-    We assume:
-    - MR == M_REGISTER_TILE_BF16 == 8
-    - sizeof(bfloat16_t) == 2 bytes
-    - A_packed is allocated with aligned_alloc(ALIGNMENT, ...)
-    - A_packed has at least k_pad * m_end * sizeof(bfloat16_t) bytes of allocated memory
-    - micropanel_stride is a multiple of MR and of ALIGNMENT / sizeof(bfloat16_t)
+/* Pack A (AVX-512)
+    Uses 16x16 transpose.
 */
-inline void packA_avx2_bf16(
-    const bfloat16_t *__restrict__ A_tile, /* Pointer to the start of the B cache level tile */
-    bfloat16_t *__restrict__ A_packed,     /* Destination buffer */
-    int A_stride, /* Offset between the start of two rows of A_tile */
-    int micropanel_stride, /* Offset between the start of two consecutive micropanels in A_packed */
+inline void packA_avx512_bf16(
+    const bfloat16_t *__restrict__ A_tile,
+    bfloat16_t *__restrict__ A_packed,
+    int A_stride,
+    int micropanel_stride,
     int m_end, int k_end, int k_pad
 ) {
-    constexpr int MR = M_REGISTER_TILE_BF16;
-    static_assert(MR == 8, "packA_avx2_bf16 assumes MR == 8");
-
+    constexpr int MR = M_REGISTER_TILE_BF16; // 16
     int i_register = 0;
 
-    // Main packing loop (with avx2, m_remain == MR == 8)
+    // Main packing loop
     for (; (i_register + 1) * MR <= m_end; ++i_register) {
         int k = 0;
-
-        // First we iterate through MRxMR (8x8) blocks of A_tile, transpose them with avx2 and write them to A_packed
+        // Transpose 16x16 blocks
         for (; k + MR <= k_end; k += MR) {
             const auto* src = &A_tile[(i_register * MR) * A_stride + k];
             auto* dst = &A_packed[i_register * micropanel_stride + k * MR];
-            transpose_8x8_avx2_bf16(src, dst, A_stride, MR); // Here the dst matrix is a MRxMR block inside a micropanel
+            transpose_16x16_avx512_bf16(src, dst, A_stride, MR);
         }
 
-        // Cleanup k (no avx)
+        // Cleanup k (copy scalar)
         for (; k < k_end; ++k) {
             const auto* src = &A_tile[(i_register * MR) * A_stride + k];
             auto* dst = &A_packed[i_register * micropanel_stride + k * MR];
+            // Use AVX loads/stores for the column if possible, but simple copy is safe here
             for (int i = 0; i < MR; ++i) {
                 dst[i] = src[i * A_stride];
             }
         }
 
-        // Zero pad along k
+        // Zero pad k
         for (; k < k_pad; ++k) {
             auto* dst = &A_packed[i_register * micropanel_stride + k * MR];
-            _mm_store_si128(reinterpret_cast<__m128i*>(dst), _mm_setzero_si128());
+            // 16 bf16s = 32 bytes = YMM
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(dst), _mm256_setzero_si256());
         }
     }
 
-    // Cleanup i (no avx, m_remain < 8)
+    // Cleanup i (m_remain < 16)
     int m_remain = m_end - i_register * MR;
-    int k = 0;
-    for (; k < k_end; ++k) {
-        const auto* src = &A_tile[(i_register * MR) * A_stride + k];
-        auto* dst = &A_packed[i_register * micropanel_stride + k * m_remain];
-        for (int i = 0; i < m_remain; ++i) {
-            dst[i] = src[i * A_stride];
+    if (m_remain > 0) {
+        int k = 0;
+        for (; k < k_end; ++k) {
+            const auto* src = &A_tile[(i_register * MR) * A_stride + k];
+            auto* dst = &A_packed[i_register * micropanel_stride + k * m_remain];
+            for (int i = 0; i < m_remain; ++i) {
+                dst[i] = src[i * A_stride];
+            }
         }
-    }
-    for (; k < k_pad; ++k) {
-        auto* dst = &A_packed[i_register * micropanel_stride + k * m_remain];
-        for (int i = 0; i < m_remain; ++i) {
-            dst[i] = 0;
+        for (; k < k_pad; ++k) {
+            auto* dst = &A_packed[i_register * micropanel_stride + k * m_remain];
+            for (int i = 0; i < m_remain; ++i) {
+                dst[i] = 0;
+            }
         }
     }
 }
 
-/*  Pack a cache level tile of B into the B_packed buffer using a layout optimized for the microkernel.
-
-    We employ the following nested layout so the data can be read contiguously by the microkernel: 
-    - B_packed contains ceil(n_end / NR) micropanels (j_register loop outside the microkernel)
-    - each micropanel contains k_pad rows (k loop in the microkernel)
-    - each row contains NR values (avx2 vectorization in the microkernel)
-
-    The memory layout of B_packed is accessed as follows:
-        B_packed[j_register * micropanel_stride + k * NR + j]
-
-    We will employ zero padding to ensure that even the rows of the last micropanel contain exactly NR values.
-
-    We assume:
-    - NR == N_REGISTER_TILE_BF16 == 8
-    - sizeof(bfloat16_t) == 2 bytes
-    - B_packed is allocated with aligned_alloc(ALIGNMENT, ...)
-    - B_packed has at least k_pad * round_up(n_end, NR) * sizeof(bfloat16_t) bytes of allocated memory
-    - micropanel_stride is a multiple of NR and of ALIGNMENT / sizeof(bfloat16_t)
+/* Pack A (Scalar Version)
+   
+   This creates the same layout as the AVX version but processes elements one by one.
+   Layout:
+   - Strips of height MR=16.
+   - Inside a strip, data is stored column-wise (column-major).
+   - A_packed[i_register * micropanel_stride + k * MR + i]
 */
-inline void packB_avx2_bf16(
-    const bfloat16_t *__restrict__ B_tile, /* Pointer to the start of the B cache level tile */
-    bfloat16_t *__restrict__ B_packed,     /* Destination buffer */
-    int B_stride, /* Offset between the start of two consecutive rows in B_tile */
-    int micropanel_stride, /* Offset between the start of two consecutive micropanels in B_packed */
+inline void packA_scalar_bf16(
+    const bfloat16_t *__restrict__ A_tile,
+    bfloat16_t *__restrict__ A_packed,
+    int A_stride,
+    int micropanel_stride,
+    int m_end, int k_end, int k_pad
+) {
+    constexpr int MR = M_REGISTER_TILE_BF16; // 16
+    int i_register = 0;
+
+    // 1. Main loop: Process full blocks of MR rows
+    for (; (i_register + 1) * MR <= m_end; ++i_register) {
+        int row_offset = i_register * MR;
+        int panel_offset = i_register * micropanel_stride;
+
+        // Iterate over columns k
+        for (int k = 0; k < k_end; ++k) {
+            // For each column, copy MR rows contiguously (transposing from row-major source)
+            for (int i = 0; i < MR; ++i) {
+                // Src: A[row + i][k]
+                // Dst: Micropanel[k][i]
+                A_packed[panel_offset + k * MR + i] = A_tile[(row_offset + i) * A_stride + k];
+            }
+        }
+
+        // Zero padding for k (if k_pad > k_end)
+        for (int k = k_end; k < k_pad; ++k) {
+            for (int i = 0; i < MR; ++i) {
+                A_packed[panel_offset + k * MR + i] = 0;
+            }
+        }
+    }
+
+    // 2. Cleanup loop: Process remaining rows (m_remain < MR)
+    // The layout here packs only 'm_remain' elements per column, not MR.
+    int m_remain = m_end - i_register * MR;
+    if (m_remain > 0) {
+        int row_offset = i_register * MR;
+        int panel_offset = i_register * micropanel_stride;
+
+        for (int k = 0; k < k_end; ++k) {
+            for (int i = 0; i < m_remain; ++i) {
+                A_packed[panel_offset + k * m_remain + i] = A_tile[(row_offset + i) * A_stride + k];
+            }
+        }
+
+        // Zero padding for k
+        for (int k = k_end; k < k_pad; ++k) {
+            for (int i = 0; i < m_remain; ++i) {
+                A_packed[panel_offset + k * m_remain + i] = 0;
+            }
+        }
+    }
+}
+
+/* Pack B (AVX-512)
+    Uses 256-bit load/store instructions to move 16 bf16s (32 bytes) at once.
+*/
+inline void packB_avx512_bf16(
+    const bfloat16_t *__restrict__ B_tile,
+    bfloat16_t *__restrict__ B_packed,
+    int B_stride,
+    int micropanel_stride,
     int n_end, int k_end, int k_pad
 ) {
-    constexpr int NR = N_REGISTER_TILE_BF16;
-    static_assert(NR == 8, "packB_avx2_bf16 assumes NR == 8");
-
-    // Main packing loop (SIMD)
+    constexpr int NR = N_REGISTER_TILE_BF16; // 16
     int j_register = 0; 
+    
+    // Main SIMD loop
     for (; (j_register + 1) * NR <= n_end; ++j_register) {
         int k = 0;
         for (; k < k_end; ++k) {
             const auto* src = &B_tile[k * B_stride + (j_register * NR)];
             auto* dst = &B_packed[j_register * micropanel_stride + k * NR];
-            // Load from src 8 x 16bit scalars, and then store them to dst
-            __m128i tmp = _mm_loadu_si128(reinterpret_cast<const __m128i*>(src));
-            _mm_store_si128(reinterpret_cast<__m128i*>(dst), tmp);
+            // Copy 16 bf16s (32 bytes) using YMM
+            __m256i tmp = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(src));
+            _mm256_store_si256(reinterpret_cast<__m256i*>(dst), tmp);
         }
 
-        // Pad to zero for all remaining k
+        // Pad k
         for (; k < k_pad; ++k) {
             auto* dst = &B_packed[j_register * micropanel_stride + k * NR];
-            _mm_store_si128(reinterpret_cast<__m128i*>(dst), _mm_setzero_si128());
+            _mm256_store_si256(reinterpret_cast<__m256i*>(dst), _mm256_setzero_si256());
         }
     }
 
-    // Now we handle the remaining j up to n_end (this can be viewed as a last step in the j_register loop).
-    // In other words, we are handling the last micropanel if there are some remaining j
+    // Cleanup j
     int n_remain = n_end - j_register * NR;
     if (n_remain == 0) return; 
 
-    // We set directly to zero the whole last micropanel to handle zero-padding.
-    // We can set to zero with simd NR > n_remain values since we assumed to own enough memory.
+    // Zero entire last micropanel for padding safety
     for (int k = 0; k < k_pad; ++k) {
         auto* dst = &B_packed[j_register * micropanel_stride + k * NR];
-        _mm_store_si128(reinterpret_cast<__m128i*>(dst), _mm_setzero_si128());
+        _mm256_store_si256(reinterpret_cast<__m256i*>(dst), _mm256_setzero_si256());
     }
 
-    // Read the remaining scalars from src and write them to dst
+    // Copy remaining
     for (int k = 0; k < k_end; ++k) {
         for (int j = 0; j < n_remain; ++j) {
             auto src_val = B_tile[k * B_stride + (j_register * NR + j)];
             B_packed[j_register * micropanel_stride + k * NR + j] = src_val;
         }
     }
-    
 }
 
-inline void gemm_bf16_avx2_tiled_parallel_N(
+inline void gemm_bf16_avx512_tiled_parallel_N(
     const bfloat16_t* __restrict__ A, 
     const bfloat16_t* __restrict__ B, 
     float* __restrict__ C, 
@@ -460,81 +460,55 @@ inline void gemm_bf16_avx2_tiled_parallel_N(
     const int MR = M_REGISTER_TILE_BF16;
     const int NR = N_REGISTER_TILE_BF16;
     
-    static_assert(NR == 8, "gemm_bf16_avx2_tiled_parallel_N assumes NR == 8");
-    static_assert(MR == 8, "gemm_bf16_avx2_tiled_parallel_N assumes MR == 8");
-    assert(N > 0 && "N should be > 0");
-    assert(M > 0 && "M should be > 0");
-    assert(K > 0 && "K should be > 0");
-
-    const int KC = round_up(std::min(K_CACHE_TILE_BF16, K), K_UNROLL_BF16); // We enforce KC to be a nonzero multiple of K_UNROLL_BF16
-    const int MC = std::min(M_CACHE_TILE_BF16, M); // Note that we handle also MC < MR
-    const int NC = round_up(clamp(N / num_threads, NR, N_CACHE_TILE_BF16), NR); // We enforce NC to be a nonzero multiple of NR
+    // Tuned for ZMM
+    const int KC = round_up(std::min(K_CACHE_TILE_BF16, K), K_UNROLL_BF16); 
+    const int MC = std::min(M_CACHE_TILE_BF16, M); 
+    const int NC = round_up(clamp(N / num_threads, NR, N_CACHE_TILE_BF16), NR);
 
     #pragma omp parallel
     {
-        // Allocate A_packed, private per thread (ideally stored in L2/L1 cache)
         const int max_micropanel_stride_A = round_up(KC * MR, ALIGNMENT / sizeof(bfloat16_t));
         const int n_micropanels_A = ceil_division(MC, MR);
-        size_t elements_A_packed = size_t(n_micropanels_A) * max_micropanel_stride_A;
         size_t bytes_A_packed = round_up(n_micropanels_A * max_micropanel_stride_A * sizeof(bfloat16_t), ALIGNMENT);
         auto* A_packed = reinterpret_cast<bfloat16_t*>(aligned_alloc(ALIGNMENT, bytes_A_packed));
 
-        // Allocate B_packed, private per thread (stored in L1/L2/L3 cache depending on N and on num_threads)
         const int max_micropanel_stride_B = round_up(KC * NR, ALIGNMENT / sizeof(bfloat16_t));
         const int n_micropanels_B = ceil_division(NC, NR);
-        size_t elements_B_packed = size_t(n_micropanels_B) * max_micropanel_stride_B;
-        size_t bytes_B_packed = round_up(elements_B_packed * sizeof(bfloat16_t), ALIGNMENT);
+        size_t bytes_B_packed = round_up(n_micropanels_B * max_micropanel_stride_B * sizeof(bfloat16_t), ALIGNMENT);
         auto* B_packed = reinterpret_cast<bfloat16_t*>(aligned_alloc(ALIGNMENT, bytes_B_packed));
 
-        // (j_cache < j_cache_end) here is equivalent to (j_cache * NC < N)
         int j_cache_end = ceil_division(N, NC);
 
-        // Cache level tiling 
-        // j_cache * NC, k_cache * KC and i_cache * MC are "the starting indicies of cache level blocks"
         #pragma omp for schedule(static)
         for (int j_cache = 0; j_cache < j_cache_end; ++j_cache) {
             int n_end = std::min(NC, N - j_cache * NC);
 
             for (int k_cache = 0; k_cache * KC < K; ++k_cache) {
-                // When packing A and B, we will pad along the k dim with zeros up to k_pad.
-                // This ensures k_pad is divisible by the unrolling depth.
                 const int k_end = std::min(KC, K - k_cache * KC);
                 const int k_pad = round_up(k_end, K_UNROLL_BF16);
 
-                // Stride between the start of two consecutive micropanels inside A_packed.
-                // We round it up to ensure alignment.
-                // See packA_avx2_bf16 for the A_packed layout explanation.
                 const int micropanel_stride_A = round_up(k_pad * MR, ALIGNMENT / sizeof(bfloat16_t));
-
-                // Stride between the start of two consecutive micropanels inside B_packed.
-                // We round it up to ensure alignment.
-                // See packB_avx2_bf16() for the B_packed layout explanation.
                 const int micropanel_stride_B = round_up(k_pad * NR, ALIGNMENT / sizeof(bfloat16_t));
 
-                // Each thread packs a cache level tile of B into a B_packed private buffer
-                packB_avx2_bf16(
+                packB_avx512_bf16(
                     &B[(k_cache * KC) * N + (j_cache * NC)], B_packed, 
                     N, micropanel_stride_B, n_end, k_end, k_pad
                 );
 
-                // (i_cache < i_cache_end) here is equivalent to (i_cache * MC < M)
                 int i_cache_end = ceil_division(M, MC);
                 for (int i_cache = 0; i_cache < i_cache_end; ++i_cache) {
                     int m_end = std::min(MC, M - i_cache * MC);
 
-                    // Each thread packs a cache level tile of A into a A_packed private buffer
-                    packA_avx2_bf16(
+                    packA_scalar_bf16(
                         &A[(i_cache * MC) * K + (k_cache * KC)], A_packed, 
                         K, micropanel_stride_A, m_end, k_end, k_pad
                     );
             
-                    // Register level tiling
-                    // i_register * MR and j_register * NR are "the starting offsets of register level blocks inside the cache level blocks"
                     int i_register = 0;
                     for (; (i_register + 1) * MR <= m_end; ++i_register) {
                         for (int j_register = 0; j_register * NR < n_end; ++j_register) {
                             int n_remain = std::min(NR, n_end - j_register * NR);
-                            microkernel_8x8_avx2_bf16(
+                            microkernel_16x16_avx512_bf16(
                                 &A_packed[i_register * micropanel_stride_A],
                                 &B_packed[j_register * micropanel_stride_B],
                                 &C[(i_cache * MC + i_register * MR) * N + (j_cache * NC + j_register * NR)],
@@ -544,12 +518,11 @@ inline void gemm_bf16_avx2_tiled_parallel_N(
                         }
                     }
                     
-                    // Cleanup in case m_end was not divisible by MR
                     int m_remain = std::min(MR, m_end - i_register * MR);
                     if (m_remain != 0) {
                         for (int j_register = 0; j_register * NR < n_end; ++j_register) {
                             int n_remain = std::min(NR, n_end - j_register * NR);
-                            microkernel_cleanup_avx2_bf16(
+                            microkernel_cleanup_avx512_bf16(
                                 &A_packed[i_register * micropanel_stride_A],
                                 &B_packed[j_register * micropanel_stride_B],
                                 &C[(i_cache * MC + i_register * MR) * N + (j_cache * NC + j_register * NR)],
@@ -561,13 +534,12 @@ inline void gemm_bf16_avx2_tiled_parallel_N(
                 }
             }
         }
-
         std::free(A_packed);
         std::free(B_packed);
     }
 }
 
-inline void gemm_bf16_avx2_tiled_parallel_M(
+inline void gemm_bf16_avx512_tiled_parallel_M(
     const bfloat16_t* __restrict__ A, 
     const bfloat16_t* __restrict__ B, 
     float* __restrict__ C, 
@@ -576,81 +548,55 @@ inline void gemm_bf16_avx2_tiled_parallel_M(
     const int num_threads = omp_get_max_threads();
     const int MR = M_REGISTER_TILE_BF16;
     const int NR = N_REGISTER_TILE_BF16;
-    
-    static_assert(NR == 8, "gemm_bf16_avx2_tiled_parallel_M assumes NR == 8");
-    static_assert(MR == 8, "gemm_bf16_avx2_tiled_parallel_M assumes MR == 8");
-    assert(N > 0 && "N should be > 0");
-    assert(M > 0 && "M should be > 0");
-    assert(K > 0 && "K should be > 0");
 
-    const int KC = round_up(std::min(K_CACHE_TILE_BF16, K), K_UNROLL_BF16); // We enforce KC to be a nonzero multiple of K_UNROLL_BF16
-    const int MC = clamp(M / num_threads, 1, M_CACHE_TILE_BF16); // Note that we handle also MC < MR
-    const int NC = round_up(std::min(N, N_CACHE_TILE_BF16), NR); // We enforce NC to be a nonzero multiple of NR
+    const int KC = round_up(std::min(K_CACHE_TILE_BF16, K), K_UNROLL_BF16); 
+    const int MC = clamp(M / num_threads, 1, M_CACHE_TILE_BF16); 
+    const int NC = round_up(std::min(N, N_CACHE_TILE_BF16), NR); 
 
-    // Allocate B_packed, shared across threads (ideally stored in L3 cache)
     const int max_micropanel_stride_B = round_up(KC * NR, ALIGNMENT / sizeof(bfloat16_t));
     const int n_micropanels_B = ceil_division(NC, NR);
-    size_t elements_B_packed = size_t(n_micropanels_B) * max_micropanel_stride_B;
-    size_t bytes_B_packed = round_up(elements_B_packed * sizeof(bfloat16_t), ALIGNMENT);
+    size_t bytes_B_packed = round_up(size_t(n_micropanels_B) * max_micropanel_stride_B * sizeof(bfloat16_t), ALIGNMENT);
     auto* B_packed = reinterpret_cast<bfloat16_t*>(aligned_alloc(ALIGNMENT, bytes_B_packed));
 
     #pragma omp parallel
     {
-        // Allocate A_packed, private per thread (ideally stored in L2/L1 cache)
         const int max_micropanel_stride_A = round_up(KC * MR, ALIGNMENT / sizeof(bfloat16_t));
         const int n_micropanels_A = ceil_division(MC, MR);
-        size_t elements_A_packed = size_t(n_micropanels_A) * max_micropanel_stride_A;
         size_t bytes_A_packed = round_up(n_micropanels_A * max_micropanel_stride_A * sizeof(bfloat16_t), ALIGNMENT);
         auto* A_packed = reinterpret_cast<bfloat16_t*>(aligned_alloc(ALIGNMENT, bytes_A_packed));
 
-        // Cache level tiling 
-        // j_cache * NC, k_cache * KC and i_cache * MC are "the starting indicies of cache level blocks"
         for (int j_cache = 0; j_cache * NC < N; ++j_cache) {
             int n_end = std::min(NC, N - j_cache * NC);
 
             for (int k_cache = 0; k_cache * KC < K; ++k_cache) {
-                // When packing A and B, we will pad along the k dim with zeros up to k_pad.
-                // This ensures k_pad is divisible by the unrolling depth.
                 const int k_end = std::min(KC, K - k_cache * KC);
                 const int k_pad = round_up(k_end, K_UNROLL_BF16);
 
-                // Stride between the start of two consecutive micropanels inside A_packed.
-                // We round it up to ensure alignment.
-                // See packA_avx2_bf16 for the A_packed layout explanation.
                 const int micropanel_stride_A = round_up(k_pad * MR, ALIGNMENT / sizeof(bfloat16_t));
-
-                // Stride between the start of two consecutive micropanels inside B_packed.
-                // We round it up to ensure alignment.
-                // See packB_avx2_bf16() for the B_packed layout explanation.
                 const int micropanel_stride_B = round_up(k_pad * NR, ALIGNMENT / sizeof(bfloat16_t));
 
-                // Pack a cache level tile of B with a single thread into a B_packed buffer shared across threads
                 #pragma omp single 
-                packB_avx2_bf16(
+                packB_avx512_bf16(
                     &B[(k_cache * KC) * N + (j_cache * NC)], B_packed, 
                     N, micropanel_stride_B, n_end, k_end, k_pad
                 );
 
-                // (i_cache < i_cache_end) here is equivalent to (i_cache * MC < M)
                 int i_cache_end = ceil_division(M, MC);
 
                 #pragma omp for schedule(static)
                 for (int i_cache = 0; i_cache < i_cache_end; ++i_cache) {
                     int m_end = std::min(MC, M - i_cache * MC);
 
-                    // Each thread packs a cache level tile of A into a A_packed private buffer
-                    packA_avx2_bf16(
+                    packA_scalar_bf16(
                         &A[(i_cache * MC) * K + (k_cache * KC)], A_packed, 
                         K, micropanel_stride_A, m_end, k_end, k_pad
                     );
             
-                    // Register level tiling
-                    // i_register * MR and j_register * NR are "the starting offsets of register level blocks inside the cache level blocks"
                     int i_register = 0;
                     for (; (i_register + 1) * MR <= m_end; ++i_register) {
                         for (int j_register = 0; j_register * NR < n_end; ++j_register) {
                             int n_remain = std::min(NR, n_end - j_register * NR);
-                            microkernel_8x8_avx2_bf16(
+                            microkernel_16x16_avx512_bf16(
                                 &A_packed[i_register * micropanel_stride_A],
                                 &B_packed[j_register * micropanel_stride_B],
                                 &C[(i_cache * MC + i_register * MR) * N + (j_cache * NC + j_register * NR)],
@@ -660,12 +606,11 @@ inline void gemm_bf16_avx2_tiled_parallel_M(
                         }
                     }
                     
-                    // Cleanup in case m_end was not divisible by MR
                     int m_remain = std::min(MR, m_end - i_register * MR);
                     if (m_remain != 0) {
                         for (int j_register = 0; j_register * NR < n_end; ++j_register) {
                             int n_remain = std::min(NR, n_end - j_register * NR);
-                            microkernel_cleanup_avx2_bf16(
+                            microkernel_cleanup_avx512_bf16(
                                 &A_packed[i_register * micropanel_stride_A],
                                 &B_packed[j_register * micropanel_stride_B],
                                 &C[(i_cache * MC + i_register * MR) * N + (j_cache * NC + j_register * NR)],
@@ -677,10 +622,8 @@ inline void gemm_bf16_avx2_tiled_parallel_M(
                 }
             }
         }
-
         std::free(A_packed);
     }
-
     std::free(B_packed);
 }
 
@@ -698,9 +641,9 @@ inline void gemm_bf16_tiled(const Matrix& A_base, const Matrix& B_base, Matrix& 
     auto* C_ptr = reinterpret_cast<float*>(C.raw_data);
 
     if (M > N) {
-        return gemm_bf16_avx2_tiled_parallel_M(A_ptr, B_ptr, C_ptr, M, N, K);
+        return gemm_bf16_avx512_tiled_parallel_M(A_ptr, B_ptr, C_ptr, M, N, K);
     } else {
-        return gemm_bf16_avx2_tiled_parallel_N(A_ptr, B_ptr, C_ptr, M, N, K);
+        return gemm_bf16_avx512_tiled_parallel_N(A_ptr, B_ptr, C_ptr, M, N, K);
     }
 }
 

@@ -119,7 +119,7 @@ struct MatrixINT8 : public Matrix {
         for(int i=0; i<num_elements; ++i) {
             float val = src_ptr[i];
             int32_t q = static_cast<int32_t>(std::round(val / scale)) + zero_point;
-            q = std::max(-128, std::min(127, q));
+            q = clamp(q, -128, 127);
             dst_ptr[i] = static_cast<int8_t>(q);
         }
     }

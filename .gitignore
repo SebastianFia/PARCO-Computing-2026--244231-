@@ -2,8 +2,8 @@
 /build
 /.vscode
 /experiments_output
-/matrices_data
 /.valgrind_output
 /logs
 /oneDNN
 sync-remote.bash
+/matrices_data
