@@ -44,7 +44,7 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Parse CLI arguments for experiment orchestration
+    // Parse CLI arguments
     std::string matrix_name = argv[1];
     std::string dtype       = argv[2];
     std::string impl        = argv[3];

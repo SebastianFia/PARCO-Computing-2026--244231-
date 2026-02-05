@@ -12,9 +12,8 @@ CXXFLAGS := -std=c++17 -mavx512f -mavx512vnni -mfma -qopenmp -Ofast \
             -I$(DNNLROOT)/include -Iinclude \
             --gcc-toolchain=$(GCC_PATH)
 
-# Linker Flags - THE FIX IS HERE
-# 1. We link against $(DNNL_IOMP_ROOT)/lib instead of $(DNNLROOT)/lib
-# 2. We add rpaths for both the GCC libs and this specific OneDNN lib
+# We link against $(DNNL_IOMP_ROOT)/lib instead of $(DNNLROOT)/lib
+# We add rpaths for both the GCC libs and this specific OneDNN lib
 LDFLAGS  := -L$(DNNL_IOMP_ROOT)/lib -ldnnl -liomp5 \
             -Wl,-rpath,$(GCC_PATH)/lib64 \
             -Wl,-rpath,$(DNNL_IOMP_ROOT)/lib
